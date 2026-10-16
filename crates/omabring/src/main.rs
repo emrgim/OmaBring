@@ -1,5 +1,6 @@
 mod ui;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use gtk::glib;
@@ -8,6 +9,35 @@ use libadwaita as adw;
 use libadwaita::prelude::*;
 use omabring_core::{default_data_dir, home_dir, load_active_palette, App, VERSION};
 use omabring_stores::Registry;
+
+/// GTK 4.22 resolves a missing icon by calling the same lookup again with
+/// the name `image-missing`. When that icon is absent from the theme, the
+/// call never returns and `gtk_widget_show` overflows the main thread.
+/// A loose PNG in an extra search path is the unthemed fallback GTK checks
+/// after the theme directories.
+fn install_icon_fallback() {
+    let Some(display) = gtk::gdk::Display::default() else {
+        return;
+    };
+    let dir = fallback_icon_dir();
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    let png = dir.join("image-missing.png");
+    if std::fs::write(&png, include_bytes!("../../../assets/image-missing.png")).is_err() {
+        return;
+    }
+    gtk::IconTheme::for_display(&display).add_search_path(&dir);
+}
+
+fn fallback_icon_dir() -> PathBuf {
+    let preferred = default_data_dir().join("icon-fallback");
+    if std::fs::create_dir_all(&preferred).is_ok() {
+        preferred
+    } else {
+        std::env::temp_dir().join("omabring-icon-fallback")
+    }
+}
 
 fn main() -> glib::ExitCode {
     let args: Vec<String> = std::env::args().collect();
@@ -28,6 +58,7 @@ fn main() -> glib::ExitCode {
         .application_id("im.mrg.OmaBring")
         .build();
     app.connect_activate(move |app| {
+        install_icon_fallback();
         if let Some(window) = app.active_window() {
             window.present();
             return;

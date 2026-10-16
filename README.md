@@ -19,6 +19,8 @@ The app reads the active theme from `~/.config/omarchy/current/theme/colors.toml
 
 `install.sh` builds the release binaries, installs a launcher entry so OmaBring shows up in the Omarchy app launcher, and installs a systemd user service. OmaBring does not install a bar plugin. Open it from the app launcher.
 
+The window registers a small `image-missing` icon before it is shown. GTK 4.22 otherwise repeats that lookup until the main thread overflows when the active icon theme does not provide it.
+
 ## Install
 
 Runtime libraries on Arch: `gtk4` and `libadwaita`. Building also needs those development files, a C compiler, and Rust.
