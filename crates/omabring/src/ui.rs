@@ -14,8 +14,8 @@ use gtk4 as gtk;
 use libadwaita as adw;
 use libadwaita::prelude::*;
 use omabring_core::{
-    home_dir, load_active_palette, theme_watch_paths, App, CartLine, ForecastStatus,
-    InvoiceSummary, Offer, StoreId,
+    active_stylesheet, home_dir, load_active_palette, theme_watch_paths, App, CartLine,
+    ForecastStatus, InvoiceSummary, Offer, StoreId,
 };
 use omabring_stores::Registry;
 
@@ -220,7 +220,7 @@ fn refresh_theme(provider: &gtk::CssProvider, current: &RefCell<String>) {
     let _guard = ClearApply;
 
     let palette = load_active_palette(&home_dir());
-    let css = palette.to_css();
+    let css = active_stylesheet(&home_dir());
     if css != *current.borrow() {
         *current.borrow_mut() = css.clone();
         provider.load_from_data(&css);
@@ -1653,6 +1653,7 @@ fn settings_page(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
     let address = omabring_core::default_bind_addr();
     let url = gtk::Label::new(Some(&format!("http://{address}")));
     url.add_css_class("bf-delta");
+    url.add_css_class("bf-link");
     url.set_xalign(0.0);
     url.set_selectable(true);
     let note = gtk::Label::new(Some(

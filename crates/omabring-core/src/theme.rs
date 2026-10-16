@@ -95,7 +95,13 @@ impl RawColors {
             .or(self.dark_background)
             .unwrap_or_else(|| background.clone());
         let lighter_background = self.lighter_background.unwrap_or_else(|| selection.clone());
-        let border = self.border.unwrap_or_else(|| with_alpha(&foreground, 0.40));
+        let border = self.border.unwrap_or_else(|| {
+            if !lighter_background.eq_ignore_ascii_case(&background) {
+                lighter_background.clone()
+            } else {
+                muted.clone()
+            }
+        });
         let mode = self.mode.unwrap_or_else(|| {
             if channel_sum(&background) > 382 {
                 "light".into()
@@ -144,7 +150,7 @@ impl Palette {
             blue: "#89b4fa".into(),
             darker_background: "#11111b".into(),
             lighter_background: "#313244".into(),
-            border: with_alpha("#cdd6f4", 0.40),
+            border: "#313244".into(),
             font: DEFAULT_FONT.into(),
         }
     }
@@ -159,374 +165,60 @@ impl Palette {
     /// makes style resolution recurse inside `gtk_widget_show` until the main
     /// thread overflows.
     pub fn to_css(&self) -> String {
-        let accent_fg = contrast_fg(&self.accent);
-        let font = css_font_family(&self.font);
-        format!(
-            r#"/* OmaBring follows the active Omarchy theme. */
-window.omabring {{
-  --omabring-bg: {bg};
-  --omabring-surface: {lighter};
-  --omabring-fg: {fg};
-  --omabring-accent: {accent};
-  --omabring-accent-fg: {accent_fg};
-  --omabring-muted: {muted};
-  --omabring-sidebar-bg: {darker};
-  --omabring-card-bg: {lighter};
-  --omabring-selection: {selection};
-  --omabring-border: {border};
-  --omabring-line: {fg};
-  --omabring-fill: {fg};
-  --omabring-on-fill: {bg};
-  --omabring-danger: {red};
-  --omabring-ok: {green};
-  --omabring-warn: {yellow};
-  background-color: var(--omabring-bg);
-  color: var(--omabring-fg);
-  font-family: {font};
-  font-size: 14px;
-  border-radius: 0;
-}}
-
-window.omabring,
-window.omabring * {{
-  font-family: {font};
-  border-radius: 0;
-  box-shadow: none;
-  outline: none;
-}}
-
-window.omabring label,
-window.omabring entry,
-window.omabring text,
-window.omabring textview {{
-  color: var(--omabring-fg);
-}}
-
-window.omabring .bf-header {{
-  background-color: var(--omabring-bg);
-  border-bottom: 1px dashed var(--omabring-line);
-}}
-
-window.omabring .bf-mark {{
-  background-color: var(--omabring-fill);
-  color: var(--omabring-on-fill);
-  font-weight: 700;
-  font-size: 13px;
-  min-width: 34px;
-  min-height: 34px;
-}}
-
-window.omabring .bf-brand {{
-  font-size: 16px;
-  font-weight: 700;
-  letter-spacing: 0.3px;
-}}
-
-window.omabring .bf-kicker {{
-  color: var(--omabring-muted);
-  font-size: 10px;
-  letter-spacing: 1.6px;
-}}
-
-window.omabring .bf-field {{
-  color: var(--omabring-muted);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.8px;
-}}
-
-window.omabring .bf-muted {{
-  color: var(--omabring-muted);
-  font-size: 13px;
-}}
-
-window.omabring .bf-h1 {{
-  font-size: 32px;
-  font-weight: 700;
-  letter-spacing: 0.4px;
-}}
-
-window.omabring .bf-h1-sm {{
-  font-size: 20px;
-  font-weight: 700;
-  letter-spacing: 0.3px;
-}}
-
-window.omabring .bf-go {{
-  color: var(--omabring-fg);
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.8px;
-}}
-
-window.omabring .bf-delta {{
-  font-size: 24px;
-  font-weight: 700;
-}}
-
-window.omabring .bf-ok {{
-  color: var(--omabring-fg);
-  font-size: 12px;
-  font-weight: 700;
-}}
-
-window.omabring .bf-danger {{
-  color: var(--omabring-danger);
-}}
-
-window.omabring button {{
-  background-color: var(--omabring-fill);
-  color: var(--omabring-on-fill);
-  border: 1px solid var(--omabring-fill);
-  border-radius: 0;
-  padding: 12px 16px;
-  min-height: 0;
-  font-weight: 700;
-  box-shadow: none;
-}}
-
-window.omabring button label {{
-  color: var(--omabring-on-fill);
-  font-weight: 700;
-}}
-
-window.omabring button.bf-ghost,
-window.omabring button.bf-ghost label {{
-  background-color: transparent;
-  color: var(--omabring-fg);
-  border-color: var(--omabring-line);
-}}
-
-window.omabring button.bf-chip,
-window.omabring button.bf-chip label {{
-  background-color: transparent;
-  color: var(--omabring-muted);
-  border: 1px solid var(--omabring-line);
-  padding: 4px 8px;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.4px;
-  min-height: 0;
-}}
-
-window.omabring button.bf-tab,
-window.omabring button.bf-tab label {{
-  background-color: transparent;
-  color: var(--omabring-muted);
-  border: 1px solid transparent;
-  padding: 7px 10px;
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.8px;
-  min-height: 0;
-}}
-
-window.omabring button.bf-chip.on,
-window.omabring button.bf-tab.on,
-window.omabring button.bf-chip.on label,
-window.omabring button.bf-tab.on label {{
-  background-color: var(--omabring-fill);
-  color: var(--omabring-on-fill);
-  border-color: var(--omabring-fill);
-}}
-
-window.omabring button.bf-tab:focus {{
-  border-color: var(--omabring-accent);
-}}
-
-window.omabring .bf-card {{
-  background-color: var(--omabring-bg);
-  color: var(--omabring-fg);
-  border: 1px solid var(--omabring-line);
-  padding: 18px 16px;
-}}
-
-window.omabring .bf-dash {{
-  padding: 10px 12px 8px;
-}}
-
-window.omabring .bf-filters {{
-  border-bottom: 1px solid var(--omabring-line);
-  padding: 0 0 8px;
-}}
-
-window.omabring .bf-theme {{
-  background-color: var(--omabring-fill);
-  color: var(--omabring-on-fill);
-  font-size: 12px;
-  font-weight: 700;
-  padding: 7px 10px;
-}}
-
-window.omabring .bf-dashed {{
-  border-style: dashed;
-}}
-
-window.omabring .bf-pill {{
-  color: var(--omabring-muted);
-  border: 1px solid var(--omabring-border);
-  padding: 2px 6px;
-  font-size: 11px;
-  font-weight: 700;
-}}
-
-window.omabring .bf-pill.on {{
-  background-color: var(--omabring-fill);
-  color: var(--omabring-on-fill);
-  border-color: var(--omabring-fill);
-}}
-
-window.omabring .bf-cap {{
-  background-color: var(--omabring-fill);
-  color: var(--omabring-on-fill);
-  padding: 3px 8px;
-  font-size: 11px;
-  font-weight: 700;
-}}
-
-window.omabring .bf-cap.off {{
-  background-color: transparent;
-  color: var(--omabring-muted);
-  border: 1px dashed var(--omabring-border);
-}}
-
-window.omabring .bf-thumb,
-window.omabring .bf-logo {{
-  font-size: 18px;
-  font-weight: 700;
-  background-color: var(--omabring-selection);
-  color: var(--omabring-fg);
-  min-width: 48px;
-  min-height: 48px;
-}}
-
-window.omabring .bf-logo {{
-  min-width: 64px;
-  min-height: 64px;
-  font-size: 22px;
-}}
-
-window.omabring picture.bf-logo {{
-  background-color: transparent;
-}}
-
-window.omabring .logo-carrefour {{ background-color: #004e9f; color: #ffffff; }}
-window.omabring .logo-union {{ background-color: #0b7a3e; color: #ffffff; }}
-window.omabring .logo-grandiose {{ background-color: #1a1a1a; color: #d4af37; }}
-window.omabring .logo-waitrose {{ background-color: #007a33; color: #ffffff; }}
-window.omabring .logo-spinneys {{ background-color: #8b1e3f; color: #ffffff; }}
-window.omabring .logo-mmi {{ background-color: #1a1a1a; color: #ffffff; }}
-window.omabring .logo-african {{ background-color: #b11226; color: #ffffff; }}
-
-window.omabring .bf-bar {{
-  background-color: transparent;
-  min-height: 110px;
-}}
-
-window.omabring .bf-bar-fill {{
-  background-color: var(--omabring-fg);
-  min-width: 8px;
-}}
-
-window.omabring .bf-bar.on {{
-  border: 1px solid var(--omabring-accent);
-  color: var(--omabring-accent);
-}}
-
-window.omabring .bf-row {{
-  background-color: transparent;
-  border-bottom: 1px dashed var(--omabring-line);
-  padding: 8px 4px;
-}}
-
-window.omabring .bf-row:hover,
-window.omabring .bf-row:hover label {{
-  background-color: var(--omabring-fill);
-  color: var(--omabring-on-fill);
-}}
-
-window.omabring .bf-thead {{
-  border-bottom: 1px solid var(--omabring-line);
-  padding: 10px 8px;
-}}
-
-window.omabring .bf-thead label {{
-  color: var(--omabring-muted);
-  font-size: 11px;
-  font-weight: 700;
-}}
-
-window.omabring button.bf-th,
-window.omabring button.bf-th label {{
-  background-color: transparent;
-  color: var(--omabring-muted);
-  border: none;
-  padding: 0;
-  font-size: 11px;
-  font-weight: 700;
-  min-height: 0;
-}}
-
-window.omabring button.bf-th.on,
-window.omabring button.bf-th.on label {{
-  background-color: transparent;
-  color: var(--omabring-fg);
-  border: none;
-}}
-
-window.omabring entry,
-window.omabring passwordentry,
-window.omabring searchentry,
-window.omabring spinbutton {{
-  background-color: var(--omabring-bg);
-  color: var(--omabring-fg);
-  border: 1px solid var(--omabring-line);
-  border-radius: 0;
-  box-shadow: none;
-  min-height: 0;
-  padding: 12px 13px;
-}}
-
-window.omabring textview,
-window.omabring textview text {{
-  background-color: var(--omabring-bg);
-  color: var(--omabring-fg);
-}}
-
-window.omabring scrolledwindow,
-window.omabring viewport {{
-  background-color: var(--omabring-bg);
-  border: none;
-}}
-
-window.omabring selection {{
-  background-color: var(--omabring-accent);
-  color: var(--omabring-accent-fg);
-}}
-
-window.omabring popover,
-window.omabring popover contents {{
-  background-color: var(--omabring-surface);
-  color: var(--omabring-fg);
-  border: 1px solid var(--omabring-border);
-  border-radius: 0;
-}}
-"#,
-            bg = self.background,
-            fg = self.foreground,
-            darker = self.darker_background,
-            lighter = self.lighter_background,
-            selection = self.selection,
-            accent = self.accent,
-            accent_fg = accent_fg,
-            muted = self.muted,
-            border = self.border,
-            red = self.red,
-            green = self.green,
-            yellow = self.yellow,
-            font = font,
-        )
+        render_sheet(self)
     }
+}
+
+fn render_sheet(palette: &Palette) -> String {
+    let accent_fg = readable_fg(&palette.accent, &palette.background, &palette.foreground);
+    let font = css_font_family(&palette.font);
+    include_str!("../../../packaging/omabring.css.tpl")
+        .replace("{{ background }}", &palette.background)
+        .replace("{{ foreground }}", &palette.foreground)
+        .replace("{{ accent_fg }}", &accent_fg)
+        .replace("{{ accent }}", &palette.accent)
+        .replace("{{ selection }}", &palette.selection)
+        .replace("{{ muted }}", &palette.muted)
+        .replace("{{ darker_background }}", &palette.darker_background)
+        .replace("{{ lighter_background }}", &palette.lighter_background)
+        .replace("{{ border }}", &palette.border)
+        .replace("{{ red }}", &palette.red)
+        .replace("{{ green }}", &palette.green)
+        .replace("{{ yellow }}", &palette.yellow)
+        .replace("{{ font }}", &font)
+}
+
+/// Stylesheet for the open window.
+///
+/// Omarchy writes one CSS file per app into the active theme when
+/// `omarchy-theme-set` renders `~/.config/omarchy/themed/*.tpl`. A finished
+/// `omabring.css` is the window sheet. `supermarket.css` is used when that
+/// file is an OmaBring sheet. A template that still contains `{{`
+/// placeholders is ignored, and the sheet is built from the palette.
+/// `cycle.css` and `shader-desk.css` belong to other apps and are not applied.
+pub fn active_stylesheet(home: &Path) -> String {
+    if let Some(dir) = resolve_theme_dir(home) {
+        for name in ["omabring.css", "supermarket.css"] {
+            if let Some(sheet) = owned_sheet(&dir.join(name)) {
+                return sheet;
+            }
+        }
+    }
+    load_active_palette(home).to_css()
+}
+
+fn owned_sheet(path: &Path) -> Option<String> {
+    let text = fs::read_to_string(path).ok()?;
+    if !text.contains("window.omabring")
+        || text.contains("{{")
+        || text.contains("@define-color")
+        || text.contains(":root")
+        || text.contains("--window-")
+        || text.contains("--accent-color")
+    {
+        return None;
+    }
+    Some(text)
 }
 
 /// Directories and files whose replacement should restyle the window.
@@ -688,10 +380,65 @@ fn load_palette_dir(dir: &Path) -> Option<Palette> {
             }
         }
     }
+    // Per-app sheets rendered into the theme. Later files win, so a grocery
+    // sheet can name the accent and the border after colors.toml.
+    for name in ["omabring.css", "supermarket.css"] {
+        let file = dir.join(name);
+        if file.is_file() {
+            if let Ok(text) = fs::read_to_string(&file) {
+                raw.overlay(raw_from_role_lines(&text));
+            }
+        }
+    }
     if raw.mode.is_none() && dir.join("light.mode").is_file() {
         raw.mode = Some("light".into());
     }
     raw.finish()
+}
+
+fn raw_from_role_lines(text: &str) -> RawColors {
+    let mut raw = RawColors::default();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("@define-color") {
+            apply_define(&mut raw, trimmed);
+            continue;
+        }
+        let Some(rest) = trimmed.strip_prefix("--") else {
+            continue;
+        };
+        let Some((key, value)) = rest.split_once(':') else {
+            continue;
+        };
+        let key = key
+            .trim()
+            .trim_start_matches("omabring-")
+            .to_ascii_lowercase();
+        let Some(color) = first_color(value) else {
+            continue;
+        };
+        assign_role(&mut raw, &key, color);
+    }
+    raw
+}
+
+fn assign_role(raw: &mut RawColors, key: &str, color: String) {
+    let slot = match key {
+        "background" | "bg" => &mut raw.background,
+        "foreground" | "fg" => &mut raw.foreground,
+        "accent" => &mut raw.accent,
+        "selection" => &mut raw.selection,
+        "muted" => &mut raw.muted,
+        "border" | "border-color" => &mut raw.border,
+        "lighter_background" | "lighter-background" => &mut raw.lighter_background,
+        "darker_background" | "darker-background" => &mut raw.darker_background,
+        "red" => &mut raw.red,
+        "green" => &mut raw.green,
+        "yellow" => &mut raw.yellow,
+        "blue" => &mut raw.blue,
+        _ => return,
+    };
+    *slot = Some(color);
 }
 
 fn raw_from_file(path: &Path) -> Option<RawColors> {
@@ -915,6 +662,8 @@ fn apply_define(raw: &mut RawColors, line: &str) {
         "selection" | "selected_bg" | "selected-background" => &mut raw.selection,
         "border" | "border_color" | "border-color" => &mut raw.border,
         "muted" | "subtext" => &mut raw.muted,
+        "lighter_background" | "lighter-background" | "lighter_bg" => &mut raw.lighter_background,
+        "darker_background" | "darker-background" | "darker_bg" => &mut raw.darker_background,
         "red" => &mut raw.red,
         "green" => &mut raw.green,
         "yellow" => &mut raw.yellow,
@@ -1148,20 +897,21 @@ fn channel_sum(hex: &str) -> u16 {
     u16::from(r) + u16::from(g) + u16::from(b)
 }
 
-fn with_alpha(hex: &str, alpha: f64) -> String {
-    let Some((r, g, b)) = rgb(hex) else {
-        return hex.to_string();
-    };
-    let a = (alpha.clamp(0.0, 1.0) * 255.0).round() as u8;
-    format!("#{r:02x}{g:02x}{b:02x}{a:02x}")
+fn readable_fg(accent: &str, background: &str, foreground: &str) -> String {
+    let on_bg = contrast_ratio(accent, background);
+    let on_fg = contrast_ratio(accent, foreground);
+    if on_bg >= on_fg {
+        background.to_string()
+    } else {
+        foreground.to_string()
+    }
 }
 
-fn contrast_fg(bg: &str) -> String {
-    if luminance(bg) > 0.45 {
-        "#1a1a1a".into()
-    } else {
-        "#ffffff".into()
-    }
+fn contrast_ratio(a: &str, b: &str) -> f64 {
+    let l1 = luminance(a);
+    let l2 = luminance(b);
+    let (hi, lo) = if l1 >= l2 { (l1, l2) } else { (l2, l1) };
+    (hi + 0.05) / (lo + 0.05)
 }
 
 fn css_font_family(name: &str) -> String {
@@ -1220,7 +970,11 @@ blue = "#89b4fa"
         assert!(css.contains("--omabring-bg: #1e1e2e;"));
         assert!(css.contains("--omabring-surface: #313244;"));
         assert!(css.contains("--omabring-accent: #89b4fa;"));
-        assert!(css.contains("--omabring-border:"));
+        assert!(css.contains("--omabring-fill: #89b4fa;"));
+        assert!(css.contains("--omabring-on-fill: #1e1e2e;"));
+        assert!(css.contains("--omabring-line: #313244;"));
+        assert!(css.contains("--omabring-border: #313244;"));
+        assert!(css.contains("background-color: var(--omabring-selection);"));
         assert!(css.contains("background-color: var(--omabring-bg);"));
         assert!(css.contains("border-radius: 0;"));
         assert!(
@@ -1472,5 +1226,87 @@ red = "#f7768e"
         )
         .unwrap();
         assert_eq!(load_font_name(home.path()), "Iosevka Term");
+    }
+
+    #[test]
+    fn accent_text_is_the_readable_theme_color() {
+        let text = r##"
+mode = "dark"
+accent = "#88a4d2"
+selection = "#2a2d3a"
+muted = "#8b8d97"
+background = "#151518"
+darker_background = "#101014"
+lighter_background = "#1c1c21"
+foreground = "#e2e3e8"
+"##;
+        let palette = load_palette_str(text).unwrap();
+        assert_eq!(palette.border, "#1c1c21");
+        let css = palette.to_css();
+        assert!(css.contains("--omabring-accent: #88a4d2;"));
+        assert!(css.contains("--omabring-fill: #88a4d2;"));
+        assert!(css.contains("--omabring-on-fill: #151518;"));
+        assert!(css.contains("--omabring-line: #1c1c21;"));
+        assert!(css.contains("--omabring-fg: #e2e3e8;"));
+        assert!(!css.contains("#e2e3e866"));
+    }
+
+    #[test]
+    fn border_uses_muted_when_the_raised_surface_matches_the_background() {
+        let text = r##"
+background = "#151518"
+foreground = "#e2e3e8"
+lighter_background = "#151518"
+muted = "#8b8d97"
+accent = "#88a4d2"
+"##;
+        let palette = load_palette_str(text).unwrap();
+        assert_eq!(palette.border, "#8b8d97");
+    }
+
+    #[test]
+    fn rendered_app_sheet_wins_and_a_template_does_not() {
+        let home = tempfile::tempdir().unwrap();
+        let theme = home.path().join(".local/state/omarchy/current/theme");
+        fs::create_dir_all(&theme).unwrap();
+        fs::write(
+            theme.join("colors.toml"),
+            "background = \"#151518\"\nforeground = \"#e2e3e8\"\naccent = \"#88a4d2\"\n",
+        )
+        .unwrap();
+        fs::write(
+            theme.join("supermarket.css"),
+            "window.omabring { --omabring-accent: #112233; background: {{ accent }}; }\n",
+        )
+        .unwrap();
+        let generated = active_stylesheet(home.path());
+        assert!(generated.contains("--omabring-accent: #88a4d2;"));
+        assert!(!generated.contains("{{"));
+        fs::write(
+            theme.join("omabring.css"),
+            "window.omabring { background-color: #151518; color: #e2e3e8; }\n",
+        )
+        .unwrap();
+        let sheet = active_stylesheet(home.path());
+        assert!(sheet.contains("background-color: #151518;"));
+        assert!(!sheet.contains("--omabring-fill"));
+    }
+
+    #[test]
+    fn supermarket_role_colors_overlay_the_palette() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("colors.toml"),
+            "background = \"#151518\"\nforeground = \"#e2e3e8\"\naccent = \"#88a4d2\"\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("supermarket.css"),
+            "@define-color border #2a2a30;\n--accent: #88a4d2;\n",
+        )
+        .unwrap();
+        let palette = load_palette_path(dir.path()).unwrap();
+        assert_eq!(palette.accent, "#88a4d2");
+        assert_eq!(palette.border, "#2a2a30");
     }
 }

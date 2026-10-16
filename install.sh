@@ -42,6 +42,11 @@ fi
 # OmaBring is not an Omarchy bar plugin. Drop a copy left by an older install.
 rm -rf "${HOME}/.config/omarchy/plugins/emrgim.omabring"
 
+# omarchy-theme-set renders this into the active theme as omabring.css,
+# beside supermarket.css and the other per-app sheets.
+mkdir -p "${HOME}/.config/omarchy/themed"
+install -m 0644 "${ROOT}/packaging/omabring.css.tpl" "${HOME}/.config/omarchy/themed/omabring.css.tpl"
+
 echo "OmaBring is installed."
 echo "App: ${BIN_DIR}/omabring"
 echo "Service: ${BIN_DIR}/omabring-service"
