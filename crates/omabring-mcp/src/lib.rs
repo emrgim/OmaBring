@@ -277,11 +277,9 @@ async fn mcp(State(server): State<Server>, headers: HeaderMap, body: Body) -> Re
         return unauthorized(&server);
     };
     let app = server.app.clone();
-    let token_for_user = token.clone();
-    let user = match tokio::task::spawn_blocking(move || app.user_for_access_token(&token_for_user))
-        .await
-    {
-        Ok(Ok(user)) => user,
+    let token_for_check = token.clone();
+    match tokio::task::spawn_blocking(move || app.require_access_token(&token_for_check)).await {
+        Ok(Ok(())) => {}
         _ => return unauthorized(&server),
     };
     if method == "tools/list" {
@@ -305,8 +303,7 @@ async fn mcp(State(server): State<Server>, headers: HeaderMap, body: Body) -> Re
     let app = server.app.clone();
     let backend = server.backend.clone();
     let result =
-        tokio::task::spawn_blocking(move || call_tool(&app, &backend, user, &name, &arguments))
-            .await;
+        tokio::task::spawn_blocking(move || call_tool(&app, &backend, &name, &arguments)).await;
     match result {
         Ok(Ok(payload)) => Json(json!({
             "jsonrpc": "2.0",
@@ -333,7 +330,6 @@ async fn mcp(State(server): State<Server>, headers: HeaderMap, body: Body) -> Re
 fn call_tool(
     app: &App,
     backend: &Registry,
-    user_id: i64,
     name: &str,
     arguments: &Value,
 ) -> std::result::Result<Value, String> {
@@ -346,19 +342,13 @@ fn call_tool(
     };
     match name {
         "whoami" => {
-            let email = app.email_for(user_id).map_err(|err| err.to_string())?;
-            let links = app
-                .list_store_links(user_id)
-                .map_err(|err| err.to_string())?;
+            let links = app.list_store_links().map_err(|err| err.to_string())?;
             Ok(json!({
-                "email": email,
                 "linked_stores": links.iter().filter(|link| link.linked).map(|link| link.id.as_str()).collect::<Vec<_>>()
             }))
         }
         "list_stores" => {
-            let links = app
-                .list_store_links(user_id)
-                .map_err(|err| err.to_string())?;
+            let links = app.list_store_links().map_err(|err| err.to_string())?;
             Ok(serde_json::to_value(links).unwrap_or(json!([])))
         }
         "link_store" => {
@@ -374,25 +364,24 @@ fn call_tool(
                     Some(base)
                 },
             };
-            app.link_store(user_id, store, &secrets)
+            app.link_store(store, &secrets)
                 .map_err(|err| err.to_string())?;
             Ok(json!({ "linked": store.as_str() }))
         }
         "unlink_store" => {
             let store =
                 StoreId::parse(&text("store")).ok_or_else(|| "unknown store".to_string())?;
-            app.unlink_store(user_id, store)
-                .map_err(|err| err.to_string())?;
+            app.unlink_store(store).map_err(|err| err.to_string())?;
             Ok(json!({ "unlinked": store.as_str() }))
         }
         "search" | "compare" => {
             let comparison = app
-                .search(user_id, &text("query"), backend)
+                .search(&text("query"), backend)
                 .map_err(|err| err.to_string())?;
             Ok(serde_json::to_value(comparison).unwrap_or(json!({})))
         }
         "cart_list" => {
-            let carts = app.carts(user_id).map_err(|err| err.to_string())?;
+            let carts = app.carts().map_err(|err| err.to_string())?;
             Ok(serde_json::to_value(carts).unwrap_or(json!([])))
         }
         "cart_add" => {
@@ -402,7 +391,6 @@ fn call_tool(
             let price = arguments.get("unit_price").and_then(|v| v.as_f64());
             let cart = app
                 .cart_add(
-                    user_id,
                     store,
                     &text("product_id"),
                     &text("name"),
@@ -426,7 +414,7 @@ fn call_tool(
                 StoreId::parse(&text("store")).ok_or_else(|| "unknown store".to_string())?;
             let qty = arguments.get("qty").and_then(|v| v.as_f64()).unwrap_or(1.0);
             let cart = app
-                .cart_set_qty(user_id, store, &text("line_id"), qty)
+                .cart_set_qty(store, &text("line_id"), qty)
                 .map_err(|err| err.to_string())?;
             Ok(serde_json::to_value(cart).unwrap_or(json!({})))
         }
@@ -434,23 +422,21 @@ fn call_tool(
             let store =
                 StoreId::parse(&text("store")).ok_or_else(|| "unknown store".to_string())?;
             let cart = app
-                .cart_remove(user_id, store, &text("line_id"))
+                .cart_remove(store, &text("line_id"))
                 .map_err(|err| err.to_string())?;
             Ok(serde_json::to_value(cart).unwrap_or(json!({})))
         }
         "cart_clear" => {
             let store =
                 StoreId::parse(&text("store")).ok_or_else(|| "unknown store".to_string())?;
-            let cart = app
-                .cart_clear(user_id, store)
-                .map_err(|err| err.to_string())?;
+            let cart = app.cart_clear(store).map_err(|err| err.to_string())?;
             Ok(serde_json::to_value(cart).unwrap_or(json!({})))
         }
         "checkout" => {
             let store =
                 StoreId::parse(&text("store")).ok_or_else(|| "unknown store".to_string())?;
             let record = app
-                .checkout(user_id, store, backend)
+                .checkout(store, backend)
                 .map_err(|err| err.to_string())?;
             Ok(serde_json::to_value(record).unwrap_or(json!({})))
         }
@@ -461,24 +447,24 @@ fn call_tool(
                 arguments.to_string()
             };
             let saved = app
-                .import_document(user_id, &document)
+                .import_document(&document)
                 .map_err(|err| err.to_string())?;
             Ok(serde_json::to_value(saved).unwrap_or(json!([])))
         }
         "list_invoices" => {
-            let invoices = app.list_invoices(user_id).map_err(|err| err.to_string())?;
+            let invoices = app.list_invoices().map_err(|err| err.to_string())?;
             Ok(serde_json::to_value(invoices).unwrap_or(json!([])))
         }
         "spend" => {
             let range = SpendRange::parse(&text("range")).unwrap_or(SpendRange::ThisMonth);
             let report = app
-                .spend(user_id, range, Utc::now().date_naive())
+                .spend(range, Utc::now().date_naive())
                 .map_err(|err| err.to_string())?;
             Ok(serde_json::to_value(report).unwrap_or(json!({})))
         }
         "forecast" => {
             let items = app
-                .forecast(user_id, Utc::now().date_naive())
+                .forecast(Utc::now().date_naive())
                 .map_err(|err| err.to_string())?;
             Ok(serde_json::to_value(items).unwrap_or(json!([])))
         }
@@ -499,7 +485,7 @@ fn tool_defs() -> Value {
         })
     };
     json!([
-        tool("whoami", "Signed-in OmaBring account.", &[], json!({})),
+        tool("whoami", "Linked stores on this machine.", &[], json!({})),
         tool(
             "list_stores",
             "Store accounts linked on this machine.",
@@ -827,7 +813,6 @@ mod tests {
             .unwrap();
         assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
 
-        let session = server.app.register("a@b.co", "password1").unwrap();
         let verifier = "abcdefghijklmnopqrstuvwxyz0123456789abcdefg";
         let challenge = pkce_s256(verifier);
         let pending = server
@@ -841,10 +826,7 @@ mod tests {
                 None,
             )
             .unwrap();
-        server
-            .app
-            .decide_authorization(&pending, session.user_id, true)
-            .unwrap();
+        server.app.decide_authorization(&pending, true).unwrap();
         let location = match server.app.poll_authorization(&pending).unwrap() {
             AuthzPoll::Ready { location } => location,
             other => panic!("unexpected {other:?}"),

@@ -1,12 +1,12 @@
 # OmaBring
 
-OmaBring is a native desktop app for [Omarchy](https://omarchy.org) (Arch Linux and Hyprland). It is a UAE grocery shopper: sign in, link store accounts, search and compare prices, keep carts, prepare checkout, import receipts, and see spending plus what to buy again.
+OmaBring is a native desktop app for [Omarchy](https://omarchy.org) (Arch Linux and Hyprland). It is a personal UAE grocery shopper on this machine: link store accounts, search and compare prices, keep carts, prepare checkout, import receipts, and see spending plus what to buy again.
 
 The window is GTK 4 and libadwaita. It follows the active Omarchy theme and runs as a Wayland application. A background service on this machine exposes the same features to an approved client over MCP, with OAuth.
 
 ## Features
 
-- A local account, with the password stored as a hash.
+- One grocery record for the person signed in to the machine. OmaBring does not ask for its own email or password.
 - Store sign-ins for Carrefour, Union Coop, Grandiose, Spinneys, Waitrose, MMI, and African & Eastern. Usernames and passwords are encrypted with a machine key in the data directory (`0600`).
 - Product search and price comparison across linked stores and imported receipts.
 - A cart for every store, and checkout that prepares the cart. Payment stays on the store website.
@@ -31,7 +31,7 @@ Runtime libraries on Arch: `gtk4` and `libadwaita`. Building also needs those de
 
 The app binary is `~/.local/bin/omabring`. The service binary is `~/.local/bin/omabring-service`. Data lives in `~/.local/share/omabring` (override with `OMABRING_DATA_DIR`). The service listens on `127.0.0.1:8787` (override with `OMABRING_BIND`).
 
-Sign in inside the OmaBring window before approving a client. The window asks for that approval. The service does not open a browser page.
+The window asks before an MCP client may use this machine's data. Allow or deny that request in the OmaBring window. The service does not open a browser page.
 
 ## Local service and OAuth
 
@@ -112,7 +112,7 @@ cargo build --release
 | --- | --- |
 | `crates/omabring` | GTK 4 window |
 | `crates/omabring-service` | Background MCP and OAuth service |
-| `crates/omabring-core` | Accounts, encryption, carts, receipts, spending, forecasts, theme colors |
+| `crates/omabring-core` | Encryption, carts, receipts, spending, forecasts, theme colors |
 | `crates/omabring-stores` | Store adapter interface and the seven stores |
 | `crates/omabring-mcp` | HTTP MCP and OAuth |
 | `packaging/` | Launcher entry and systemd user unit |

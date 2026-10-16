@@ -4,15 +4,7 @@ use thiserror::Error;
 pub enum Error {
     #[error("database error")]
     Db(#[from] rusqlite::Error),
-    #[error("invalid email")]
-    InvalidEmail,
-    #[error("password must be at least 8 characters")]
-    WeakPassword,
-    #[error("an account with that email already exists")]
-    EmailTaken,
-    #[error("incorrect email or password")]
-    BadCredentials,
-    #[error("sign in required")]
+    #[error("access token is not valid")]
     Unauthorized,
     #[error("that store account is not linked")]
     StoreNotLinked,

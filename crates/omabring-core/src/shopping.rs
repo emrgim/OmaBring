@@ -12,10 +12,10 @@ use crate::model::{
 use crate::{now_rfc3339, App};
 
 impl App {
-    pub fn list_store_links(&self, user_id: i64) -> Result<Vec<StoreLink>> {
+    pub fn list_store_links(&self) -> Result<Vec<StoreLink>> {
         let mut links = Vec::new();
         for store in StoreId::all() {
-            let secrets = self.secrets_for(user_id, store)?;
+            let secrets = self.secrets_for(store)?;
             links.push(StoreLink {
                 id: store,
                 name: store.name(),
@@ -29,7 +29,7 @@ impl App {
         Ok(links)
     }
 
-    pub fn link_store(&self, user_id: i64, store: StoreId, secrets: &StoreSecrets) -> Result<()> {
+    pub fn link_store(&self, store: StoreId, secrets: &StoreSecrets) -> Result<()> {
         if secrets.username.trim().is_empty() || secrets.password.is_empty() {
             return Err(Error::Message(
                 "username and password are required to link a store".into(),
@@ -49,29 +49,29 @@ impl App {
         let updated = now_rfc3339();
         self.with_conn(|conn| {
             conn.execute(
-                "INSERT INTO store_accounts (user_id, store, ciphertext, updated_at) VALUES (?1, ?2, ?3, ?4)
-                 ON CONFLICT(user_id, store) DO UPDATE SET ciphertext = excluded.ciphertext, updated_at = excluded.updated_at",
-                params![user_id, store.as_str(), blob, updated],
+                "INSERT INTO store_accounts (store, ciphertext, updated_at) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(store) DO UPDATE SET ciphertext = excluded.ciphertext, updated_at = excluded.updated_at",
+                params![store.as_str(), blob, updated],
             )?;
             Ok(())
         })
     }
 
-    pub fn unlink_store(&self, user_id: i64, store: StoreId) -> Result<()> {
+    pub fn unlink_store(&self, store: StoreId) -> Result<()> {
         self.with_conn(|conn| {
             conn.execute(
-                "DELETE FROM store_accounts WHERE user_id = ?1 AND store = ?2",
-                params![user_id, store.as_str()],
+                "DELETE FROM store_accounts WHERE store = ?1",
+                params![store.as_str()],
             )?;
             Ok(())
         })
     }
 
-    pub fn secrets_for(&self, user_id: i64, store: StoreId) -> Result<Option<StoreSecrets>> {
+    pub fn secrets_for(&self, store: StoreId) -> Result<Option<StoreSecrets>> {
         let blob = self.with_conn(|conn| {
             conn.query_row(
-                "SELECT ciphertext FROM store_accounts WHERE user_id = ?1 AND store = ?2",
-                params![user_id, store.as_str()],
+                "SELECT ciphertext FROM store_accounts WHERE store = ?1",
+                params![store.as_str()],
                 |row| row.get::<_, Vec<u8>>(0),
             )
             .optional()
@@ -85,7 +85,7 @@ impl App {
         Ok(Some(secrets))
     }
 
-    pub fn import_document(&self, user_id: i64, document: &str) -> Result<Vec<InvoiceSummary>> {
+    pub fn import_document(&self, document: &str) -> Result<Vec<InvoiceSummary>> {
         if document.len() > 2_000_000 {
             return Err(Error::InvalidInvoice("document is too large".into()));
         }
@@ -103,21 +103,19 @@ impl App {
         }
         let mut saved = Vec::new();
         for invoice in invoices {
-            saved.push(self.upsert_invoice(user_id, invoice)?);
+            saved.push(self.upsert_invoice(invoice)?);
         }
         Ok(saved)
     }
 
-    pub fn list_invoices(&self, user_id: i64) -> Result<Vec<InvoiceSummary>> {
-        self.with_conn(|conn| load_invoices(conn, user_id, None))
+    pub fn list_invoices(&self) -> Result<Vec<InvoiceSummary>> {
+        self.with_conn(|conn| load_invoices(conn, None))
     }
 
-    pub fn delete_invoice(&self, user_id: i64, invoice_id: i64) -> Result<()> {
+    pub fn delete_invoice(&self, invoice_id: i64) -> Result<()> {
         self.with_conn(|conn| {
-            let changed = conn.execute(
-                "DELETE FROM invoices WHERE id = ?1 AND user_id = ?2",
-                params![invoice_id, user_id],
-            )?;
+            let changed =
+                conn.execute("DELETE FROM invoices WHERE id = ?1", params![invoice_id])?;
             if changed == 0 {
                 return Err(Error::Message("receipt not found".into()));
             }
@@ -125,9 +123,9 @@ impl App {
         })
     }
 
-    pub fn spend(&self, user_id: i64, range: SpendRange, today: NaiveDate) -> Result<SpendReport> {
+    pub fn spend(&self, range: SpendRange, today: NaiveDate) -> Result<SpendReport> {
         let (start, end) = range_bounds(range, today);
-        let invoices = self.list_invoices(user_id)?;
+        let invoices = self.list_invoices()?;
         let mut invoice_count = 0u32;
         let mut totals: Vec<MoneyTotal> = Vec::new();
         let mut by_store: Vec<GroupSpend> = Vec::new();
@@ -179,8 +177,8 @@ impl App {
         })
     }
 
-    pub fn forecast(&self, user_id: i64, today: NaiveDate) -> Result<Vec<ForecastItem>> {
-        let invoices = self.list_invoices(user_id)?;
+    pub fn forecast(&self, today: NaiveDate) -> Result<Vec<ForecastItem>> {
+        let invoices = self.list_invoices()?;
         #[derive(Clone)]
         struct Sample {
             date: NaiveDate,
@@ -279,26 +277,25 @@ impl App {
         Ok(items)
     }
 
-    pub fn cart(&self, user_id: i64, store: StoreId) -> Result<Cart> {
+    pub fn cart(&self, store: StoreId) -> Result<Cart> {
         self.with_conn(|conn| {
             Ok(Cart {
                 store,
-                lines: load_cart(conn, user_id, store)?,
+                lines: load_cart(conn, store)?,
             })
         })
     }
 
-    pub fn carts(&self, user_id: i64) -> Result<Vec<Cart>> {
+    pub fn carts(&self) -> Result<Vec<Cart>> {
         let mut carts = Vec::new();
         for store in StoreId::all() {
-            carts.push(self.cart(user_id, store)?);
+            carts.push(self.cart(store)?);
         }
         Ok(carts)
     }
 
     pub fn cart_add(
         &self,
-        user_id: i64,
         store: StoreId,
         product_id: &str,
         name: &str,
@@ -317,9 +314,8 @@ impl App {
         let line_id = uuid::Uuid::new_v4().to_string();
         self.with_conn(|conn| {
             conn.execute(
-                "INSERT INTO cart_lines (user_id, store, line_id, product_id, name, qty, unit, unit_price, currency) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                "INSERT INTO cart_lines (store, line_id, product_id, name, qty, unit, unit_price, currency) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![
-                    user_id,
                     store.as_str(),
                     line_id,
                     if product_id.trim().is_empty() { name.trim() } else { product_id.trim() },
@@ -332,31 +328,25 @@ impl App {
             )?;
             Ok(Cart {
                 store,
-                lines: load_cart(conn, user_id, store)?,
+                lines: load_cart(conn, store)?,
             })
         })
     }
 
-    pub fn cart_set_qty(
-        &self,
-        user_id: i64,
-        store: StoreId,
-        line_id: &str,
-        qty: f64,
-    ) -> Result<Cart> {
+    pub fn cart_set_qty(&self, store: StoreId, line_id: &str, qty: f64) -> Result<Cart> {
         if qty < 0.0 {
             return Err(Error::Message("quantity cannot be negative".into()));
         }
         self.with_conn(|conn| {
             if qty == 0.0 {
                 conn.execute(
-                    "DELETE FROM cart_lines WHERE user_id = ?1 AND store = ?2 AND line_id = ?3",
-                    params![user_id, store.as_str(), line_id],
+                    "DELETE FROM cart_lines WHERE store = ?1 AND line_id = ?2",
+                    params![store.as_str(), line_id],
                 )?;
             } else {
                 let changed = conn.execute(
-                    "UPDATE cart_lines SET qty = ?1 WHERE user_id = ?2 AND store = ?3 AND line_id = ?4",
-                    params![qty, user_id, store.as_str(), line_id],
+                    "UPDATE cart_lines SET qty = ?1 WHERE store = ?2 AND line_id = ?3",
+                    params![qty, store.as_str(), line_id],
                 )?;
                 if changed == 0 {
                     return Err(Error::Message("cart line not found".into()));
@@ -364,20 +354,20 @@ impl App {
             }
             Ok(Cart {
                 store,
-                lines: load_cart(conn, user_id, store)?,
+                lines: load_cart(conn, store)?,
             })
         })
     }
 
-    pub fn cart_remove(&self, user_id: i64, store: StoreId, line_id: &str) -> Result<Cart> {
-        self.cart_set_qty(user_id, store, line_id, 0.0)
+    pub fn cart_remove(&self, store: StoreId, line_id: &str) -> Result<Cart> {
+        self.cart_set_qty(store, line_id, 0.0)
     }
 
-    pub fn cart_clear(&self, user_id: i64, store: StoreId) -> Result<Cart> {
+    pub fn cart_clear(&self, store: StoreId) -> Result<Cart> {
         self.with_conn(|conn| {
             conn.execute(
-                "DELETE FROM cart_lines WHERE user_id = ?1 AND store = ?2",
-                params![user_id, store.as_str()],
+                "DELETE FROM cart_lines WHERE store = ?1",
+                params![store.as_str()],
             )?;
             Ok(Cart {
                 store,
@@ -386,12 +376,7 @@ impl App {
         })
     }
 
-    pub fn search(
-        &self,
-        user_id: i64,
-        query: &str,
-        backend: &dyn StoreBackend,
-    ) -> Result<Comparison> {
+    pub fn search(&self, query: &str, backend: &dyn StoreBackend) -> Result<Comparison> {
         let query = query.trim();
         if query.is_empty() {
             return Err(Error::Message("enter a product to search".into()));
@@ -399,7 +384,7 @@ impl App {
         let mut notes = Vec::new();
         let mut jobs = Vec::new();
         for store in StoreId::all() {
-            match self.secrets_for(user_id, store)? {
+            match self.secrets_for(store)? {
                 None => notes.push(StoreNote {
                     store,
                     linked: false,
@@ -472,7 +457,7 @@ impl App {
                 }
             }
         });
-        offers.extend(self.history_offers(user_id, query)?);
+        offers.extend(self.history_offers(query)?);
         offers.sort_by(|a, b| {
             a.currency
                 .cmp(&b.currency)
@@ -493,13 +478,8 @@ impl App {
         })
     }
 
-    pub fn checkout(
-        &self,
-        user_id: i64,
-        store: StoreId,
-        backend: &dyn StoreBackend,
-    ) -> Result<CheckoutRecord> {
-        let cart = self.cart(user_id, store)?;
+    pub fn checkout(&self, store: StoreId, backend: &dyn StoreBackend) -> Result<CheckoutRecord> {
+        let cart = self.cart(store)?;
         if cart.lines.is_empty() {
             return Err(Error::EmptyCart);
         }
@@ -512,7 +492,7 @@ impl App {
                 store.name()
             )
         };
-        if let Some(secrets) = self.secrets_for(user_id, store)? {
+        if let Some(secrets) = self.secrets_for(store)? {
             if secrets
                 .base_url
                 .as_deref()
@@ -558,16 +538,16 @@ impl App {
         };
         self.with_conn(|conn| {
             conn.execute(
-                "INSERT INTO checkouts (id, user_id, store, status, url, note, detail, created_at) VALUES (?1, ?2, ?3, 'prepared', ?4, ?5, ?6, ?7)",
-                params![id, user_id, store.as_str(), url, note, detail, created],
+                "INSERT INTO checkouts (id, store, status, url, note, detail, created_at) VALUES (?1, ?2, 'prepared', ?3, ?4, ?5, ?6)",
+                params![id, store.as_str(), url, note, detail, created],
             )?;
             Ok(record)
         })
     }
 
-    fn history_offers(&self, user_id: i64, query: &str) -> Result<Vec<Offer>> {
+    fn history_offers(&self, query: &str) -> Result<Vec<Offer>> {
         let needle = normalize_name(query);
-        let invoices = self.list_invoices(user_id)?;
+        let invoices = self.list_invoices()?;
         let mut buckets: Vec<Offer> = Vec::new();
         for invoice in invoices {
             let currency = invoice.currency.clone();
@@ -604,16 +584,16 @@ impl App {
         Ok(buckets)
     }
 
-    fn upsert_invoice(&self, user_id: i64, draft: DraftInvoice) -> Result<InvoiceSummary> {
+    fn upsert_invoice(&self, draft: DraftInvoice) -> Result<InvoiceSummary> {
         self.with_conn(|conn| {
             conn.execute(
-                "INSERT INTO invoices (user_id, store, invoice_no, purchased_on, currency, total) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-                 ON CONFLICT(user_id, store, invoice_no) DO UPDATE SET purchased_on = excluded.purchased_on, currency = excluded.currency, total = excluded.total",
-                params![user_id, draft.store.as_str(), draft.invoice_no, draft.purchased_on, draft.currency, draft.total],
+                "INSERT INTO invoices (store, invoice_no, purchased_on, currency, total) VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(store, invoice_no) DO UPDATE SET purchased_on = excluded.purchased_on, currency = excluded.currency, total = excluded.total",
+                params![draft.store.as_str(), draft.invoice_no, draft.purchased_on, draft.currency, draft.total],
             )?;
             let id = conn.query_row(
-                "SELECT id FROM invoices WHERE user_id = ?1 AND store = ?2 AND invoice_no = ?3",
-                params![user_id, draft.store.as_str(), draft.invoice_no],
+                "SELECT id FROM invoices WHERE store = ?1 AND invoice_no = ?2",
+                params![draft.store.as_str(), draft.invoice_no],
                 |row| row.get::<_, i64>(0),
             )?;
             conn.execute("DELETE FROM invoice_lines WHERE invoice_id = ?1", params![id])?;
@@ -645,11 +625,11 @@ struct DraftInvoice {
     lines: Vec<InvoiceLine>,
 }
 
-fn load_cart(conn: &rusqlite::Connection, user_id: i64, store: StoreId) -> Result<Vec<CartLine>> {
+fn load_cart(conn: &rusqlite::Connection, store: StoreId) -> Result<Vec<CartLine>> {
     let mut stmt = conn.prepare(
-        "SELECT line_id, product_id, name, qty, unit, unit_price, currency FROM cart_lines WHERE user_id = ?1 AND store = ?2 ORDER BY name",
+        "SELECT line_id, product_id, name, qty, unit, unit_price, currency FROM cart_lines WHERE store = ?1 ORDER BY name",
     )?;
-    let rows = stmt.query_map(params![user_id, store.as_str()], |row| {
+    let rows = stmt.query_map(params![store.as_str()], |row| {
         Ok(CartLine {
             line_id: row.get(0)?,
             product_id: row.get(1)?,
@@ -664,15 +644,11 @@ fn load_cart(conn: &rusqlite::Connection, user_id: i64, store: StoreId) -> Resul
         .map_err(Error::from)
 }
 
-fn load_invoices(
-    conn: &rusqlite::Connection,
-    user_id: i64,
-    _limit: Option<i64>,
-) -> Result<Vec<InvoiceSummary>> {
+fn load_invoices(conn: &rusqlite::Connection, _limit: Option<i64>) -> Result<Vec<InvoiceSummary>> {
     let mut stmt = conn.prepare(
-        "SELECT id, store, invoice_no, purchased_on, currency, total FROM invoices WHERE user_id = ?1 ORDER BY purchased_on DESC, id DESC",
+        "SELECT id, store, invoice_no, purchased_on, currency, total FROM invoices ORDER BY purchased_on DESC, id DESC",
     )?;
-    let invoice_rows = stmt.query_map(params![user_id], |row| {
+    let invoice_rows = stmt.query_map([], |row| {
         Ok((
             row.get::<_, i64>(0)?,
             row.get::<_, String>(1)?,
@@ -1116,18 +1092,16 @@ mod tests {
         }
     }
 
-    fn signed() -> (tempfile::TempDir, App, i64) {
+    fn opened() -> (tempfile::TempDir, App) {
         let dir = tempfile::tempdir().unwrap();
         let app = App::open(dir.path()).unwrap();
-        let session = app.register("a@b.co", "password1").unwrap();
-        (dir, app, session.user_id)
+        (dir, app)
     }
 
     #[test]
     fn store_secrets_are_encrypted_at_rest() {
-        let (_dir, app, user) = signed();
+        let (_dir, app) = opened();
         app.link_store(
-            user,
             StoreId::Carrefour,
             &StoreSecrets {
                 username: "shopper".into(),
@@ -1136,18 +1110,18 @@ mod tests {
             },
         )
         .unwrap();
-        let loaded = app.secrets_for(user, StoreId::Carrefour).unwrap().unwrap();
+        let loaded = app.secrets_for(StoreId::Carrefour).unwrap().unwrap();
         assert_eq!(loaded.password, "s3cret-value");
         let raw = std::fs::read(app.data_dir().join("omabring.db")).unwrap();
         let text = String::from_utf8_lossy(&raw);
         assert!(!text.contains("s3cret-value"));
-        app.unlink_store(user, StoreId::Carrefour).unwrap();
-        assert!(app.secrets_for(user, StoreId::Carrefour).unwrap().is_none());
+        app.unlink_store(StoreId::Carrefour).unwrap();
+        assert!(app.secrets_for(StoreId::Carrefour).unwrap().is_none());
     }
 
     #[test]
     fn import_spend_and_forecast() {
-        let (_dir, app, user) = signed();
+        let (_dir, app) = opened();
         let doc = r#"{
             "invoices": [
                 {"store": "carrefour", "invoice_no": "A", "date": "2026-01-01", "currency": "AED", "items": [{"name": "Al Ain Water", "qty": 2, "unit": "piece", "unit_price": 1.5}]},
@@ -1155,20 +1129,20 @@ mod tests {
                 {"store": "spinneys", "invoice_no": "C", "date": "2026-01-21", "currency": "AED", "items": [{"name": "Al Ain Water", "qty": 1, "unit": "piece", "unit_price": 2.0}, {"name": "Milk", "qty": 1, "unit": "piece", "unit_price": 5}]}
             ]
         }"#;
-        let saved = app.import_document(user, doc).unwrap();
+        let saved = app.import_document(doc).unwrap();
         assert_eq!(saved.len(), 3);
-        let again = app.import_document(user, &saved_one()).unwrap();
+        let again = app.import_document(&saved_one()).unwrap();
         assert_eq!(again[0].id, saved[0].id);
         let today = NaiveDate::from_ymd_opt(2026, 1, 21).unwrap();
-        let report = app.spend(user, SpendRange::LastDays(30), today).unwrap();
+        let report = app.spend(SpendRange::LastDays(30), today).unwrap();
         assert_eq!(report.invoice_count, 3);
         assert_eq!(
             report.totals[0].amount,
             round_money(1.5 * 2.0 + 1.75 + 2.0 + 5.0)
         );
-        let last = app.spend(user, SpendRange::LastMonth, today).unwrap();
+        let last = app.spend(SpendRange::LastMonth, today).unwrap();
         assert_eq!(last.invoice_count, 0);
-        let forecast = app.forecast(user, today).unwrap();
+        let forecast = app.forecast(today).unwrap();
         assert!(forecast.iter().all(|item| item.name != "Milk"));
         let water = forecast
             .iter()
@@ -1181,7 +1155,7 @@ mod tests {
         assert_eq!(water.likely, 100);
         assert_eq!(water.status, ForecastStatus::DueToday);
         let overdue = app
-            .forecast(user, NaiveDate::from_ymd_opt(2026, 2, 5).unwrap())
+            .forecast(NaiveDate::from_ymd_opt(2026, 2, 5).unwrap())
             .unwrap();
         let water = overdue
             .iter()
@@ -1190,7 +1164,7 @@ mod tests {
         assert_eq!(water.status, ForecastStatus::Overdue);
         assert_eq!(water.likely, 100);
         let lapsed = app
-            .forecast(user, NaiveDate::from_ymd_opt(2026, 6, 1).unwrap())
+            .forecast(NaiveDate::from_ymd_opt(2026, 6, 1).unwrap())
             .unwrap();
         assert!(lapsed.is_empty());
     }
@@ -1201,13 +1175,12 @@ mod tests {
 
     #[test]
     fn csv_import_cart_and_compare() {
-        let (_dir, app, user) = signed();
+        let (_dir, app) = opened();
         let csv = "store,invoice_no,date,currency,name,qty,unit,unit_price\n\
 union coop,U-1,2026-03-02,AED,Oat Milk,2,piece,8.5\n\
 waitrose,W-1,2026-03-02,AED,Oat Milk,1,piece,11\n";
-        app.import_document(user, csv).unwrap();
+        app.import_document(csv).unwrap();
         app.link_store(
-            user,
             StoreId::Spinneys,
             &StoreSecrets {
                 username: "s".into(),
@@ -1227,7 +1200,7 @@ waitrose,W-1,2026-03-02,AED,Oat Milk,1,piece,11\n";
                 source: OfferSource::Live,
             }],
         };
-        let comparison = app.search(user, "oat milk", &backend).unwrap();
+        let comparison = app.search("oat milk", &backend).unwrap();
         let group = comparison
             .groups
             .iter()
@@ -1238,7 +1211,6 @@ waitrose,W-1,2026-03-02,AED,Oat Milk,1,piece,11\n";
         assert!(group.offers.len() >= 3);
         let cart = app
             .cart_add(
-                user,
                 StoreId::Spinneys,
                 "oat",
                 "Oat Milk",
@@ -1250,42 +1222,38 @@ waitrose,W-1,2026-03-02,AED,Oat Milk,1,piece,11\n";
             .unwrap();
         assert_eq!(cart.lines.len(), 1);
         let line = cart.lines[0].line_id.clone();
-        let cart = app
-            .cart_set_qty(user, StoreId::Spinneys, &line, 3.0)
-            .unwrap();
+        let cart = app.cart_set_qty(StoreId::Spinneys, &line, 3.0).unwrap();
         assert_eq!(cart.lines[0].qty, 3.0);
-        let checkout = app.checkout(user, StoreId::Spinneys, &backend).unwrap();
+        let checkout = app.checkout(StoreId::Spinneys, &backend).unwrap();
         assert_eq!(checkout.status, "prepared");
         assert_eq!(
             checkout.url.as_deref(),
             Some("https://shop.example/checkout")
         );
-        app.cart_clear(user, StoreId::Spinneys).unwrap();
-        assert!(app.cart(user, StoreId::Spinneys).unwrap().lines.is_empty());
+        app.cart_clear(StoreId::Spinneys).unwrap();
+        assert!(app.cart(StoreId::Spinneys).unwrap().lines.is_empty());
         assert!(matches!(
-            app.checkout(user, StoreId::Spinneys, &NoLive).unwrap_err(),
+            app.checkout(StoreId::Spinneys, &NoLive).unwrap_err(),
             Error::EmptyCart
         ));
     }
 
     #[test]
     fn this_month_spend_window() {
-        let (_dir, app, user) = signed();
+        let (_dir, app) = opened();
         app.import_document(
-            user,
             r#"{"store":"mmi","invoice_no":"1","date":"2026-02-02","currency":"AED","items":[{"name":"Tea","qty":1,"unit_price":10}]}"#,
         )
         .unwrap();
         app.import_document(
-            user,
             r#"{"store":"mmi","invoice_no":"2","date":"2026-03-02","currency":"AED","items":[{"name":"Tea","qty":1,"unit_price":12}]}"#,
         )
         .unwrap();
         let today = NaiveDate::from_ymd_opt(2026, 3, 16).unwrap();
-        let report = app.spend(user, SpendRange::ThisMonth, today).unwrap();
+        let report = app.spend(SpendRange::ThisMonth, today).unwrap();
         assert_eq!(report.invoice_count, 1);
         assert_eq!(report.totals[0].amount, 12.0);
-        let prev = app.spend(user, SpendRange::LastMonth, today).unwrap();
+        let prev = app.spend(SpendRange::LastMonth, today).unwrap();
         assert_eq!(prev.invoice_count, 1);
         assert_eq!(prev.totals[0].amount, 10.0);
     }

@@ -138,7 +138,7 @@ impl App {
         })
     }
 
-    pub fn decide_authorization(&self, pending_id: &str, user_id: i64, allow: bool) -> Result<()> {
+    pub fn decide_authorization(&self, pending_id: &str, allow: bool) -> Result<()> {
         self.with_conn(|conn| {
             let row = conn
                 .query_row(
@@ -173,8 +173,8 @@ impl App {
             let code_hash = sha256_hex(&code);
             let code_expires = plus_seconds(CODE_SECONDS);
             conn.execute(
-                "INSERT INTO oauth_codes (code_hash, client_id, user_id, redirect_uri, code_challenge, scope, expires_at, used) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0)",
-                params![code_hash, client_id, user_id, redirect_uri, challenge, scope, code_expires],
+                "INSERT INTO oauth_codes (code_hash, client_id, redirect_uri, code_challenge, scope, expires_at, used) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0)",
+                params![code_hash, client_id, redirect_uri, challenge, scope, code_expires],
             )?;
             conn.execute(
                 "UPDATE oauth_pending SET status = 'approved', auth_code = ?1, expires_at = ?2 WHERE id = ?3",
@@ -269,22 +269,21 @@ impl App {
             authenticate_client(conn, client)?;
             let row = conn
                 .query_row(
-                    "SELECT client_id, user_id, redirect_uri, code_challenge, scope, expires_at, used FROM oauth_codes WHERE code_hash = ?1",
+                    "SELECT client_id, redirect_uri, code_challenge, scope, expires_at, used FROM oauth_codes WHERE code_hash = ?1",
                     params![code_hash],
                     |row| {
                         Ok((
                             row.get::<_, String>(0)?,
-                            row.get::<_, i64>(1)?,
+                            row.get::<_, String>(1)?,
                             row.get::<_, String>(2)?,
                             row.get::<_, String>(3)?,
                             row.get::<_, String>(4)?,
-                            row.get::<_, String>(5)?,
-                            row.get::<_, i64>(6)?,
+                            row.get::<_, i64>(5)?,
                         ))
                     },
                 )
                 .optional()?;
-            let Some((client_id, user_id, saved_redirect, challenge, scope, expires, used)) = row else {
+            let Some((client_id, saved_redirect, challenge, scope, expires, used)) = row else {
                 return Err(Error::oauth("invalid_grant", "authorization code is unknown"));
             };
             if used != 0 || parse_time(&expires)? < chrono::Utc::now() {
@@ -300,7 +299,7 @@ impl App {
                 "UPDATE oauth_codes SET used = 1 WHERE code_hash = ?1 AND used = 0",
                 params![code_hash],
             )?;
-            issue_token(conn, user_id, &client_id, &scope)
+            issue_token(conn, &client_id, &scope)
         })
     }
 
@@ -310,28 +309,27 @@ impl App {
             authenticate_client(conn, client)?;
             let row = conn
                 .query_row(
-                    "SELECT id, user_id, client_id, scope, refresh_expires, revoked FROM oauth_tokens WHERE refresh_hash = ?1",
+                    "SELECT id, client_id, scope, refresh_expires, revoked FROM oauth_tokens WHERE refresh_hash = ?1",
                     params![refresh_hash],
                     |row| {
                         Ok((
                             row.get::<_, i64>(0)?,
-                            row.get::<_, i64>(1)?,
+                            row.get::<_, String>(1)?,
                             row.get::<_, String>(2)?,
                             row.get::<_, String>(3)?,
-                            row.get::<_, String>(4)?,
-                            row.get::<_, i64>(5)?,
+                            row.get::<_, i64>(4)?,
                         ))
                     },
                 )
                 .optional()?;
-            let Some((id, user_id, client_id, scope, expires, revoked)) = row else {
+            let Some((id, client_id, scope, expires, revoked)) = row else {
                 return Err(Error::oauth("invalid_grant", "refresh token is unknown"));
             };
             if revoked != 0 || client_id != client.client_id || parse_time(&expires)? < chrono::Utc::now() {
                 return Err(Error::oauth("invalid_grant", "refresh token is no longer valid"));
             }
             conn.execute("UPDATE oauth_tokens SET revoked = 1 WHERE id = ?1", params![id])?;
-            issue_token(conn, user_id, &client_id, &scope)
+            issue_token(conn, &client_id, &scope)
         })
     }
 
@@ -347,39 +345,33 @@ impl App {
         })
     }
 
-    pub fn user_for_access_token(&self, access_token: &str) -> Result<i64> {
+    pub fn require_access_token(&self, access_token: &str) -> Result<()> {
         let hash = sha256_hex(access_token);
         self.with_conn(|conn| {
             let row = conn
                 .query_row(
-                    "SELECT user_id, access_expires, revoked FROM oauth_tokens WHERE access_hash = ?1",
+                    "SELECT access_expires, revoked FROM oauth_tokens WHERE access_hash = ?1",
                     params![hash],
-                    |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?)),
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
                 )
                 .optional()?;
-            let Some((user_id, expires, revoked)) = row else {
+            let Some((expires, revoked)) = row else {
                 return Err(Error::Unauthorized);
             };
             if revoked != 0 || parse_time(&expires)? < chrono::Utc::now() {
                 return Err(Error::Unauthorized);
             }
-            Ok(user_id)
+            Ok(())
         })
     }
 }
 
-fn issue_token(
-    conn: &rusqlite::Connection,
-    user_id: i64,
-    client_id: &str,
-    scope: &str,
-) -> Result<TokenSet> {
+fn issue_token(conn: &rusqlite::Connection, client_id: &str, scope: &str) -> Result<TokenSet> {
     let access = random_token(32);
     let refresh = random_token(32);
     conn.execute(
-        "INSERT INTO oauth_tokens (user_id, client_id, access_hash, refresh_hash, scope, access_expires, refresh_expires, revoked) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0)",
+        "INSERT INTO oauth_tokens (client_id, access_hash, refresh_hash, scope, access_expires, refresh_expires, revoked) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0)",
         params![
-            user_id,
             client_id,
             sha256_hex(&access),
             sha256_hex(&refresh),
@@ -473,19 +465,18 @@ mod tests {
     use super::*;
     use crate::App;
 
-    fn setup() -> (tempfile::TempDir, App, RegisteredClient, i64) {
+    fn setup() -> (tempfile::TempDir, App, RegisteredClient) {
         let dir = tempfile::tempdir().unwrap();
         let app = App::open(dir.path()).unwrap();
-        let session = app.register("shopper@example.com", "password1").unwrap();
         let client = app
             .register_client("Grok", &["http://127.0.0.1:9/callback".into()], "none")
             .unwrap();
-        (dir, app, client, session.user_id)
+        (dir, app, client)
     }
 
     #[test]
     fn authorization_code_with_pkce_and_refresh_rotation() {
-        let (_dir, app, client, user_id) = setup();
+        let (_dir, app, client) = setup();
         let verifier = "abcdefghijklmnopqrstuvwxyz0123456789abcdefg";
         let challenge = pkce_s256(verifier);
         let pending = app
@@ -503,7 +494,7 @@ mod tests {
             app.poll_authorization(&pending).unwrap(),
             AuthzPoll::Pending
         ));
-        app.decide_authorization(&pending, user_id, true).unwrap();
+        app.decide_authorization(&pending, true).unwrap();
         let AuthzPoll::Ready { location } = app.poll_authorization(&pending).unwrap() else {
             panic!("expected redirect");
         };
@@ -523,23 +514,20 @@ mod tests {
             .exchange_code(code, "http://127.0.0.1:9/callback", verifier, &auth)
             .unwrap();
         assert_eq!(tokens.token_type, "Bearer");
-        assert_eq!(
-            app.user_for_access_token(&tokens.access_token).unwrap(),
-            user_id
-        );
+        assert!(app.require_access_token(&tokens.access_token).is_ok());
         assert!(app
             .exchange_code(code, "http://127.0.0.1:9/callback", verifier, &auth)
             .is_err());
         let rotated = app.refresh_token(&tokens.refresh_token, &auth).unwrap();
-        assert!(app.user_for_access_token(&rotated.access_token).is_ok());
+        assert!(app.require_access_token(&rotated.access_token).is_ok());
         assert!(app.refresh_token(&tokens.refresh_token, &auth).is_err());
         app.revoke_token(&rotated.access_token, &auth).unwrap();
-        assert!(app.user_for_access_token(&rotated.access_token).is_err());
+        assert!(app.require_access_token(&rotated.access_token).is_err());
     }
 
     #[test]
     fn rejects_missing_pkce_and_bad_redirect() {
-        let (_dir, app, client, user_id) = setup();
+        let (_dir, app, client) = setup();
         let err = app
             .start_authorization(
                 &client.client_id,
@@ -566,7 +554,7 @@ mod tests {
                 None,
             )
             .unwrap();
-        app.decide_authorization(&pending, user_id, false).unwrap();
+        app.decide_authorization(&pending, false).unwrap();
         let AuthzPoll::Denied { location } = app.poll_authorization(&pending).unwrap() else {
             panic!("expected denial");
         };
@@ -577,7 +565,6 @@ mod tests {
     fn confidential_client_requires_secret() {
         let dir = tempfile::tempdir().unwrap();
         let app = App::open(dir.path()).unwrap();
-        let session = app.register("shopper@example.com", "password1").unwrap();
         let client = app
             .register_client(
                 "Desk",
@@ -597,8 +584,7 @@ mod tests {
                 None,
             )
             .unwrap();
-        app.decide_authorization(&pending, session.user_id, true)
-            .unwrap();
+        app.decide_authorization(&pending, true).unwrap();
         let AuthzPoll::Ready { location } = app.poll_authorization(&pending).unwrap() else {
             panic!("ready");
         };

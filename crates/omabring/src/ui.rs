@@ -1,8 +1,6 @@
 #![allow(deprecated)]
 
 use std::cell::{Cell, RefCell};
-use std::fs;
-use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -11,23 +9,15 @@ use gtk4 as gtk;
 use libadwaita as adw;
 use libadwaita::prelude::*;
 use omabring_core::{
-    home_dir, load_active_palette, App, CartLine, Offer, Session, SpendRange, StoreId, StoreSecrets,
+    home_dir, load_active_palette, App, CartLine, Offer, SpendRange, StoreId, StoreSecrets,
 };
 use omabring_stores::Registry;
-use serde::{Deserialize, Serialize};
-
-#[derive(Serialize, Deserialize)]
-struct SavedSession {
-    token: String,
-}
 
 struct Shell {
     core: Arc<App>,
     backend: Arc<Registry>,
     window: adw::ApplicationWindow,
     toast: adw::ToastOverlay,
-    user_id: i64,
-    token: String,
     search_entry: gtk::SearchEntry,
     search_summary: gtk::Label,
     search_list: gtk::ListBox,
@@ -44,7 +34,6 @@ struct Shell {
     forecast_list: gtk::ListBox,
     forecast_label: gtk::Label,
     store_box: gtk::Box,
-    account_label: gtk::Label,
     service_label: gtk::Label,
     consent_open: Rc<Cell<bool>>,
 }
@@ -80,24 +69,9 @@ pub fn open_window(app: &adw::Application, core: Arc<App>, backend: Arc<Registry
     }
 
     let toast = adw::ToastOverlay::new();
-    let root = gtk::Stack::new();
-    toast.set_child(Some(&root));
+    let shell = build_shell(&window, &toast, core, backend);
+    toast.set_child(Some(&shell));
     window.set_content(Some(&toast));
-
-    let session = read_session(&core).and_then(|saved| core.resume(&saved.token).ok());
-    if let Some(session) = session {
-        root.add_named(
-            &build_shell(&window, &toast, core.clone(), backend.clone(), session),
-            Some("app"),
-        );
-        root.set_visible_child_name("app");
-    } else {
-        root.add_named(
-            &build_login(&window, &toast, &root, core, backend),
-            Some("login"),
-        );
-        root.set_visible_child_name("login");
-    }
     window.present();
 }
 
@@ -142,98 +116,17 @@ fn refresh_theme(provider: &gtk::CssProvider, current: &RefCell<String>) {
     }
 }
 
-fn build_login(
-    window: &adw::ApplicationWindow,
-    toast: &adw::ToastOverlay,
-    root: &gtk::Stack,
-    core: Arc<App>,
-    backend: Arc<Registry>,
-) -> gtk::Widget {
-    let box_ = gtk::Box::new(gtk::Orientation::Vertical, 12);
-    box_.set_valign(gtk::Align::Center);
-    box_.set_halign(gtk::Align::Center);
-    box_.set_width_request(420);
-    box_.set_margin_top(24);
-    box_.set_margin_bottom(24);
-    let title = gtk::Label::new(Some("OmaBring"));
-    title.add_css_class("title-1");
-    let subtitle = gtk::Label::new(Some(
-        "Search UAE stores, compare prices, and keep carts, receipts, and forecasts on this machine.",
-    ));
-    wrap_label(&subtitle);
-    subtitle.add_css_class("dim-label");
-    let email = adw::EntryRow::builder().title("Email").build();
-    let password = adw::PasswordEntryRow::builder().title("Password").build();
-    let group = adw::PreferencesGroup::new();
-    group.add(&email);
-    group.add(&password);
-    let sign_in = gtk::Button::with_label("Sign in");
-    sign_in.add_css_class("suggested-action");
-    let create = gtk::Button::with_label("Create account");
-    let error = gtk::Label::new(None);
-    error.add_css_class("error");
-    wrap_label(&error);
-    box_.append(&title);
-    box_.append(&subtitle);
-    box_.append(&group);
-    box_.append(&sign_in);
-    box_.append(&create);
-    box_.append(&error);
-
-    let submit = {
-        let core = core.clone();
-        let backend = backend.clone();
-        let window = window.clone();
-        let toast = toast.clone();
-        let root = root.clone();
-        let email = email.clone();
-        let password = password.clone();
-        let error = error.clone();
-        move |create_account: bool| {
-            let email_text = email.text().to_string();
-            let password_text = password.text().to_string();
-            let result = if create_account {
-                core.register(&email_text, &password_text)
-            } else {
-                core.login(&email_text, &password_text)
-            };
-            match result {
-                Ok(session) => {
-                    if let Err(err) = write_session(&core, &session) {
-                        error.set_text(&err.to_string());
-                        return;
-                    }
-                    let shell =
-                        build_shell(&window, &toast, core.clone(), backend.clone(), session);
-                    root.add_named(&shell, Some("app"));
-                    root.set_visible_child_name("app");
-                }
-                Err(err) => error.set_text(&err.to_string()),
-            }
-        }
-    };
-    sign_in.connect_clicked({
-        let submit = submit.clone();
-        move |_| submit(false)
-    });
-    create.connect_clicked(move |_| submit(true));
-    box_.upcast()
-}
-
 fn build_shell(
     window: &adw::ApplicationWindow,
     toast: &adw::ToastOverlay,
     core: Arc<App>,
     backend: Arc<Registry>,
-    session: Session,
 ) -> gtk::Widget {
     let shell = Rc::new(RefCell::new(Shell {
         core,
         backend,
         window: window.clone(),
         toast: toast.clone(),
-        user_id: session.user_id,
-        token: session.token,
         search_entry: gtk::SearchEntry::new(),
         search_summary: gtk::Label::new(Some(
             "Search a product across linked stores and your receipts.",
@@ -256,7 +149,6 @@ fn build_shell(
             "Forecasts use receipt dates. One-off and lapsed items stay off the list.",
         )),
         store_box: gtk::Box::new(gtk::Orientation::Vertical, 12),
-        account_label: gtk::Label::new(Some(&format!("Signed in as {}", session.email))),
         service_label: gtk::Label::new(None),
         consent_open: Rc::new(Cell::new(false)),
     }));
@@ -293,7 +185,6 @@ fn build_shell(
         wrap_label(&shell_ref.checkout_label);
         wrap_label(&shell_ref.spend_label);
         wrap_label(&shell_ref.forecast_label);
-        shell_ref.account_label.set_xalign(0.0);
         shell_ref.service_label.set_xalign(0.0);
         shell_ref.search_list.add_css_class("boxed-list");
         shell_ref.cart_list.add_css_class("boxed-list");
@@ -313,7 +204,7 @@ fn build_shell(
         ("receipts", "Receipts"),
         ("forecast", "Forecast"),
         ("stores", "Stores"),
-        ("account", "Account"),
+        ("service", "Service"),
     ] {
         let row = gtk::Label::builder()
             .label(title)
@@ -453,20 +344,13 @@ fn page(id: &str, shell_rc: &Rc<RefCell<Shell>>) -> gtk::Widget {
             let scroll = scrolled(&shell.store_box);
             page.append(&scroll);
         }
-        "account" => {
-            page.append(&shell.account_label);
+        "service" => {
             page.append(&shell.service_label);
             let note = gtk::Label::new(Some(
-                "The background service lets an approved client use the same carts, receipts, search, and forecasts. Approve each client in this window.",
+                "The background service lets an approved client use the same carts, receipts, search, and forecasts. Approve or deny each client in this window.",
             ));
             wrap_label(&note);
-            let sign_out = gtk::Button::with_label("Sign out");
-            sign_out.add_css_class("destructive-action");
-            sign_out.set_halign(gtk::Align::Start);
-            let shell_out = shell_rc.clone();
-            sign_out.connect_clicked(move |_| sign_out_clicked(&shell_out));
             page.append(&note);
-            page.append(&sign_out);
         }
         _ => {}
     }
@@ -498,18 +382,17 @@ fn wire(shell: &Rc<RefCell<Shell>>) {
 }
 
 fn run_search(shell: &Rc<RefCell<Shell>>) {
-    let (core, backend, user, query) = {
+    let (core, backend, query) = {
         let shell = shell.borrow();
         (
             shell.core.clone(),
             shell.backend.clone(),
-            shell.user_id,
             shell.search_entry.text().to_string(),
         )
     };
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let _ = tx.send(core.search(user, &query, backend.as_ref()));
+        let _ = tx.send(core.search(&query, backend.as_ref()));
     });
     let shell = shell.clone();
     glib::idle_add_local(move || match rx.try_recv() {
@@ -571,7 +454,6 @@ fn offer_row(shell: &Shell, offer: &Offer) -> gtk::ListBoxRow {
     ));
     let button = gtk::Button::with_label("Add");
     let core = shell.core.clone();
-    let user = shell.user_id;
     let store = offer.store;
     let product_id = offer.product_id.clone();
     let name = offer.name.clone();
@@ -581,7 +463,6 @@ fn offer_row(shell: &Shell, offer: &Offer) -> gtk::ListBoxRow {
     let toast = shell.toast.clone();
     button.connect_clicked(move |_| {
         match core.cart_add(
-            user,
             store,
             &product_id,
             &name,
@@ -625,16 +506,10 @@ fn add_cart_line(shell: &Rc<RefCell<Shell>>) {
             }
         }
     };
-    match shell_ref.core.cart_add(
-        shell_ref.user_id,
-        store,
-        "",
-        &name,
-        qty,
-        "piece",
-        price,
-        "AED",
-    ) {
+    match shell_ref
+        .core
+        .cart_add(store, "", &name, qty, "piece", price, "AED")
+    {
         Ok(_) => {
             drop(shell_ref);
             refresh_cart(shell);
@@ -647,7 +522,7 @@ fn clear_cart(shell: &Rc<RefCell<Shell>>) {
     let store = active_store(&shell.borrow().cart_store);
     if let Some(store) = store {
         let shell_ref = shell.borrow();
-        if let Err(err) = shell_ref.core.cart_clear(shell_ref.user_id, store) {
+        if let Err(err) = shell_ref.core.cart_clear(store) {
             shell_ref.toast.add_toast(adw::Toast::new(&err.to_string()));
             return;
         }
@@ -662,11 +537,10 @@ fn prepare_checkout(shell: &Rc<RefCell<Shell>>) {
     };
     let core = shell_ref.core.clone();
     let backend = shell_ref.backend.clone();
-    let user = shell_ref.user_id;
     drop(shell_ref);
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let _ = tx.send(core.checkout(user, store, backend.as_ref()));
+        let _ = tx.send(core.checkout(store, backend.as_ref()));
     });
     let shell = shell.clone();
     glib::idle_add_local(move || match rx.try_recv() {
@@ -699,7 +573,7 @@ fn refresh_cart(shell: &Rc<RefCell<Shell>>) {
     let Some(store) = active_store(&shell_ref.cart_store) else {
         return;
     };
-    let cart = match shell_ref.core.cart(shell_ref.user_id, store) {
+    let cart = match shell_ref.core.cart(store) {
         Ok(cart) => cart,
         Err(err) => {
             shell_ref.toast.add_toast(adw::Toast::new(&err.to_string()));
@@ -735,12 +609,11 @@ fn cart_row(
     row.set_subtitle(&format!("{} × {} · {price}", line.qty, line.unit));
     let remove = gtk::Button::with_label("Remove");
     let core = shell.core.clone();
-    let user = shell.user_id;
     let line_id = line.line_id.clone();
     let toast = shell.toast.clone();
     let shell_after = shell_rc.clone();
     remove.connect_clicked(move |_| {
-        if let Err(err) = core.cart_remove(user, store, &line_id) {
+        if let Err(err) = core.cart_remove(store, &line_id) {
             toast.add_toast(adw::Toast::new(&err.to_string()));
             return;
         }
@@ -759,7 +632,7 @@ fn import_receipt(shell: &Rc<RefCell<Shell>>) {
     let document = buffer
         .text(&buffer.start_iter(), &buffer.end_iter(), false)
         .to_string();
-    match shell_ref.core.import_document(shell_ref.user_id, &document) {
+    match shell_ref.core.import_document(&document) {
         Ok(saved) => {
             shell_ref.toast.add_toast(adw::Toast::new(&format!(
                 "Imported {} receipt(s)",
@@ -784,7 +657,7 @@ fn refresh_receipts(shell: &Rc<RefCell<Shell>>) {
         _ => SpendRange::ThisMonth,
     };
     let today = chrono::Utc::now().date_naive();
-    match shell_ref.core.spend(shell_ref.user_id, range, today) {
+    match shell_ref.core.spend(range, today) {
         Ok(report) => {
             let totals = if report.totals.is_empty() {
                 "0".into()
@@ -803,7 +676,7 @@ fn refresh_receipts(shell: &Rc<RefCell<Shell>>) {
         }
         Err(err) => shell_ref.spend_label.set_text(&err.to_string()),
     }
-    let invoices = match shell_ref.core.list_invoices(shell_ref.user_id) {
+    let invoices = match shell_ref.core.list_invoices() {
         Ok(invoices) => invoices,
         Err(err) => {
             shell_ref.toast.add_toast(adw::Toast::new(&err.to_string()));
@@ -823,12 +696,11 @@ fn refresh_receipts(shell: &Rc<RefCell<Shell>>) {
         ));
         let remove = gtk::Button::with_label("Delete");
         let core = shell_ref.core.clone();
-        let user = shell_ref.user_id;
         let id = invoice.id;
         let toast = shell_ref.toast.clone();
         let shell_after = shell.clone();
         remove.connect_clicked(move |_| {
-            if let Err(err) = core.delete_invoice(user, id) {
+            if let Err(err) = core.delete_invoice(id) {
                 toast.add_toast(adw::Toast::new(&err.to_string()));
                 return;
             }
@@ -847,7 +719,7 @@ fn refresh_forecast(shell: &Rc<RefCell<Shell>>) {
     let shell_ref = shell.borrow();
     clear_list(&shell_ref.forecast_list);
     let today = chrono::Utc::now().date_naive();
-    let items = match shell_ref.core.forecast(shell_ref.user_id, today) {
+    let items = match shell_ref.core.forecast(today) {
         Ok(items) => items,
         Err(err) => {
             shell_ref.forecast_label.set_text(&err.to_string());
@@ -886,7 +758,7 @@ fn refresh_stores(shell: &Rc<RefCell<Shell>>) {
     while let Some(child) = shell_ref.store_box.first_child() {
         shell_ref.store_box.remove(&child);
     }
-    let links = match shell_ref.core.list_store_links(shell_ref.user_id) {
+    let links = match shell_ref.core.list_store_links() {
         Ok(links) => links,
         Err(err) => {
             shell_ref.toast.add_toast(adw::Toast::new(&err.to_string()));
@@ -933,7 +805,6 @@ fn refresh_stores(shell: &Rc<RefCell<Shell>>) {
         save.add_css_class("suggested-action");
         let remove = gtk::Button::with_label("Remove");
         let core = shell_ref.core.clone();
-        let user = shell_ref.user_id;
         let toast = shell_ref.toast.clone();
         let store = link.id;
         save.connect_clicked(move |_| {
@@ -949,14 +820,14 @@ fn refresh_stores(shell: &Rc<RefCell<Shell>>) {
                     }
                 },
             };
-            match core.link_store(user, store, &secrets) {
+            match core.link_store(store, &secrets) {
                 Ok(()) => toast.add_toast(adw::Toast::new(&format!("{} saved", store.name()))),
                 Err(err) => toast.add_toast(adw::Toast::new(&err.to_string())),
             }
         });
         let core = shell_ref.core.clone();
         let toast = shell_ref.toast.clone();
-        remove.connect_clicked(move |_| match core.unlink_store(user, store) {
+        remove.connect_clicked(move |_| match core.unlink_store(store) {
             Ok(()) => toast.add_toast(adw::Toast::new(&format!("{} removed", store.name()))),
             Err(err) => toast.add_toast(adw::Toast::new(&err.to_string())),
         });
@@ -1012,22 +883,14 @@ fn poll_consent(shell: &Rc<RefCell<Shell>>) {
     dialog.set_default_response(Some("deny"));
     dialog.set_close_response("deny");
     let core = shell_ref.core.clone();
-    let user = shell_ref.user_id;
     let flag = shell_ref.consent_open.clone();
     let id = request.id;
     dialog.connect_response(None, move |_, response| {
         let allow = response == "allow";
-        let _ = core.decide_authorization(&id, user, allow);
+        let _ = core.decide_authorization(&id, allow);
         flag.set(false);
     });
     dialog.present(Some(&shell_ref.window));
-}
-
-fn sign_out_clicked(shell: &Rc<RefCell<Shell>>) {
-    let shell_ref = shell.borrow();
-    let _ = shell_ref.core.logout(&shell_ref.token);
-    let _ = fs::remove_file(session_path(&shell_ref.core));
-    shell_ref.window.close();
 }
 
 fn status_label(status: omabring_core::ForecastStatus) -> &'static str {
@@ -1048,33 +911,4 @@ fn clear_list(list: &gtk::ListBox) {
     while let Some(row) = list.row_at_index(0) {
         list.remove(&row);
     }
-}
-
-fn session_path(core: &App) -> PathBuf {
-    core.data_dir().join("session.json")
-}
-
-fn read_session(core: &App) -> Option<SavedSession> {
-    let text = fs::read_to_string(session_path(core)).ok()?;
-    serde_json::from_str(&text).ok()
-}
-
-fn write_session(core: &App, session: &Session) -> omabring_core::Result<()> {
-    let text = serde_json::to_string(&SavedSession {
-        token: session.token.clone(),
-    })
-    .map_err(|err| omabring_core::Error::Message(err.to_string()))?;
-    let path = session_path(core);
-    {
-        use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(path)?;
-        file.write_all(text.as_bytes())?;
-    }
-    Ok(())
 }

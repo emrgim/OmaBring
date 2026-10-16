@@ -1,5 +1,3 @@
-use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
-use argon2::Argon2;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use chacha20poly1305::aead::{Aead, KeyInit};
@@ -8,23 +6,6 @@ use rand::RngCore;
 use sha2::{Digest, Sha256};
 
 use crate::error::{Error, Result};
-
-pub fn hash_password(password: &str) -> Result<String> {
-    let salt = SaltString::generate(&mut rand::rngs::OsRng);
-    Argon2::default()
-        .hash_password(password.as_bytes(), &salt)
-        .map(|h| h.to_string())
-        .map_err(|_| Error::Crypto)
-}
-
-pub fn verify_password(password: &str, encoded: &str) -> bool {
-    let Ok(parsed) = PasswordHash::new(encoded) else {
-        return false;
-    };
-    Argon2::default()
-        .verify_password(password.as_bytes(), &parsed)
-        .is_ok()
-}
 
 pub fn random_bytes(len: usize) -> Vec<u8> {
     let mut buf = vec![0u8; len];
@@ -84,13 +65,6 @@ pub fn urlencode(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn password_roundtrip() {
-        let hash = hash_password("correct horse").unwrap();
-        assert!(verify_password("correct horse", &hash));
-        assert!(!verify_password("wrong horse", &hash));
-    }
 
     #[test]
     fn seal_roundtrip() {

@@ -367,14 +367,6 @@ pub struct ForecastItem {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Session {
-    pub token: String,
-    pub user_id: i64,
-    pub email: String,
-    pub expires_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegisteredClient {
     pub client_id: String,
     pub client_secret: Option<String>,
