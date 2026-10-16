@@ -101,7 +101,16 @@ fn main() -> glib::ExitCode {
             }
         };
         let dry_run = args.iter().any(|arg| arg == "--dry-run");
-        return import_bringfast(&path, dry_run);
+        let store_accounts = args.iter().any(|arg| arg == "--with-store-accounts");
+        let receipts_dir = match flag_value(&args, "--receipts-dir") {
+            Some(Ok(dir)) => Some(dir),
+            Some(Err(())) => {
+                eprintln!("omabring --receipts-dir needs a directory");
+                return glib::ExitCode::from(2);
+            }
+            None => None,
+        };
+        return import_bringfast(&path, dry_run, receipts_dir.as_deref(), store_accounts);
     }
     // These commands print and exit before GTK starts, so an SSH session
     // with no display can smoke-test a local install.
@@ -220,7 +229,12 @@ fn canonical_view(name: &str) -> Option<&'static str> {
     }
 }
 
-fn import_bringfast(path: &str, dry_run: bool) -> glib::ExitCode {
+fn import_bringfast(
+    path: &str,
+    dry_run: bool,
+    receipts_dir: Option<&str>,
+    store_accounts: bool,
+) -> glib::ExitCode {
     let core = match App::open(default_data_dir()) {
         Ok(core) => core,
         Err(err) => {
@@ -228,7 +242,12 @@ fn import_bringfast(path: &str, dry_run: bool) -> glib::ExitCode {
             return glib::ExitCode::from(1);
         }
     };
-    match core.import_bringfast(std::path::Path::new(path), dry_run) {
+    let options = omabring_core::BringfastImport {
+        dry_run,
+        receipts_dir: receipts_dir.map(std::path::PathBuf::from),
+        store_accounts,
+    };
+    match core.import_bringfast(std::path::Path::new(path), &options) {
         Ok(report) => {
             print!("{report}");
             glib::ExitCode::SUCCESS

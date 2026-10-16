@@ -568,8 +568,8 @@ impl App {
             conn.execute("DELETE FROM invoice_lines WHERE invoice_id = ?1", params![id])?;
             for line in &draft.lines {
                 conn.execute(
-                    "INSERT INTO invoice_lines (invoice_id, name, name_key, qty, unit, unit_price, line_total) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                    params![id, line.name, normalize_name(&line.name), line.qty, line.unit, line.unit_price, line.line_total],
+                    "INSERT INTO invoice_lines (invoice_id, name, name_key, qty, unit, unit_price, line_total, product_key) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    params![id, line.name, normalize_name(&line.name), line.qty, line.unit, line.unit_price, line.line_total, line.product_key],
                 )?;
             }
             Ok(InvoiceSummary {
@@ -635,7 +635,7 @@ fn load_invoices(conn: &rusqlite::Connection, _limit: Option<i64>) -> Result<Vec
             continue;
         };
         let mut lines_stmt = conn.prepare(
-            "SELECT name, qty, unit, unit_price, line_total FROM invoice_lines WHERE invoice_id = ?1 ORDER BY id",
+            "SELECT name, qty, unit, unit_price, line_total, ifnull(product_key, '') FROM invoice_lines WHERE invoice_id = ?1 ORDER BY id",
         )?;
         let lines = lines_stmt
             .query_map(params![id], |row| {
@@ -645,6 +645,7 @@ fn load_invoices(conn: &rusqlite::Connection, _limit: Option<i64>) -> Result<Vec
                     unit: row.get(2)?,
                     unit_price: row.get(3)?,
                     line_total: row.get(4)?,
+                    product_key: row.get(5)?,
                 })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -690,15 +691,7 @@ fn draft_from_json(value: &serde_json::Value) -> Result<DraftInvoice> {
     if invoice_no.is_empty() {
         return Err(Error::InvalidInvoice("invoice_no is required".into()));
     }
-    let purchased_on = value
-        .get("date")
-        .or_else(|| value.get("purchased_on"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .trim()
-        .to_string();
-    NaiveDate::parse_from_str(&purchased_on, "%Y-%m-%d")
-        .map_err(|_| Error::InvalidInvoice("date must be YYYY-MM-DD".into()))?;
+    let purchased_on = invoice_day(value)?;
     let currency = normalize_currency(
         value
             .get("currency")
@@ -756,6 +749,12 @@ fn line_from_json(item: &serde_json::Value) -> Result<InvoiceLine> {
         .unwrap_or("piece")
         .trim()
         .to_string();
+    let product_key = item
+        .get("product_key")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
     Ok(InvoiceLine {
         name,
         qty,
@@ -766,7 +765,28 @@ fn line_from_json(item: &serde_json::Value) -> Result<InvoiceLine> {
         },
         unit_price: round_money(unit_price),
         line_total: round_money(qty * unit_price),
+        product_key,
     })
+}
+
+fn invoice_day(value: &serde_json::Value) -> Result<String> {
+    for key in [
+        "date",
+        "datetime",
+        "purchased_on",
+        "purchased_at",
+        "invoice_date",
+    ] {
+        let Some(raw) = value.get(key).and_then(|v| v.as_str()) else {
+            continue;
+        };
+        if let Some(day) = crate::household::flexible_day(raw) {
+            return Ok(day.format("%Y-%m-%d").to_string());
+        }
+    }
+    Err(Error::InvalidInvoice(
+        "date must be YYYY-MM-DD or a datetime".into(),
+    ))
 }
 
 fn parse_csv_invoices(text: &str) -> Result<Vec<DraftInvoice>> {
@@ -781,8 +801,10 @@ fn parse_csv_invoices(text: &str) -> Result<Vec<DraftInvoice>> {
         idx("store").ok_or_else(|| Error::InvalidInvoice("csv needs a store column".into()))?;
     let no_i = idx("invoice_no")
         .ok_or_else(|| Error::InvalidInvoice("csv needs an invoice_no column".into()))?;
-    let date_i =
-        idx("date").ok_or_else(|| Error::InvalidInvoice("csv needs a date column".into()))?;
+    let date_i = ["date", "datetime", "purchased_at", "purchased_on", "invoice_date"]
+        .into_iter()
+        .find_map(idx)
+        .ok_or_else(|| Error::InvalidInvoice("csv needs a date column".into()))?;
     let name_i =
         idx("name").ok_or_else(|| Error::InvalidInvoice("csv needs a name column".into()))?;
     let qty_i = idx("qty").ok_or_else(|| Error::InvalidInvoice("csv needs a qty column".into()))?;
@@ -797,9 +819,9 @@ fn parse_csv_invoices(text: &str) -> Result<Vec<DraftInvoice>> {
         let store = StoreId::parse(get(store_i))
             .ok_or_else(|| Error::InvalidInvoice(format!("unknown store {}", get(store_i))))?;
         let invoice_no = get(no_i).to_string();
-        let purchased_on = get(date_i).to_string();
-        NaiveDate::parse_from_str(&purchased_on, "%Y-%m-%d")
-            .map_err(|_| Error::InvalidInvoice("date must be YYYY-MM-DD".into()))?;
+        let purchased_on = crate::household::flexible_day(get(date_i))
+            .map(|day| day.format("%Y-%m-%d").to_string())
+            .ok_or_else(|| Error::InvalidInvoice("date must be YYYY-MM-DD or a datetime".into()))?;
         let currency = normalize_currency(if let Some(i) = currency_i {
             get(i)
         } else {
@@ -833,6 +855,7 @@ fn parse_csv_invoices(text: &str) -> Result<Vec<DraftInvoice>> {
             unit,
             unit_price: round_money(unit_price),
             line_total: round_money(qty * unit_price),
+            product_key: String::new(),
         };
         if let Some(existing) = grouped
             .iter_mut()

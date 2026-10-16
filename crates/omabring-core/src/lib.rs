@@ -1,6 +1,7 @@
 mod bringfast;
 mod crypto;
 mod error;
+mod household;
 mod model;
 mod oauth;
 mod shopping;
@@ -13,7 +14,8 @@ use std::sync::Mutex;
 use chrono::{DateTime, SecondsFormat, Utc};
 use rusqlite::{params, Connection};
 
-pub use bringfast::ImportReport;
+pub use bringfast::{BringfastImport, ImportReport};
+pub use household::{default_backup_dir, ProductHistory, PurchasePoint, StorePrice};
 pub use crypto::pkce_s256;
 pub use error::{Error, Result};
 pub use model::*;
@@ -42,6 +44,7 @@ impl App {
         let conn = Connection::open(&db_path)?;
         conn.execute_batch(SCHEMA)?;
         migrate_single_owner(&conn)?;
+        household::ensure_household(&conn)?;
         let _ = fs::remove_file(data_dir.join("session.json"));
         set_mode(&db_path, 0o600);
         Ok(Self {
@@ -233,6 +236,22 @@ CREATE TABLE IF NOT EXISTS shopping_list (
     vote TEXT NOT NULL DEFAULT '',
     excluded INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS product_images (
+    name_key TEXT PRIMARY KEY,
+    path TEXT NOT NULL,
+    source_url TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS product_aliases (
+    alias_key TEXT PRIMARY KEY,
+    canonical_key TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 "#;
 
 /// Older databases keyed every row by a local account and stored a password
@@ -375,7 +394,7 @@ fn table_exists(conn: &Connection, table: &str) -> Result<bool> {
     Ok(count > 0)
 }
 
-fn column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool> {
+pub(crate) fn column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool> {
     if !table_exists(conn, table)? {
         return Ok(false);
     }

@@ -19,14 +19,24 @@ use crate::model::{StoreId, StoreSecrets};
 use crate::now_rfc3339;
 use crate::App;
 
+#[derive(Debug, Clone)]
+pub struct BringfastImport {
+    pub dry_run: bool,
+    pub receipts_dir: Option<std::path::PathBuf>,
+    pub store_accounts: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportReport {
     pub dry_run: bool,
     pub invoices_new: usize,
+    pub invoices_updated: usize,
     pub invoices_existing: usize,
     pub lines: usize,
     pub products_new: usize,
     pub products_existing: usize,
+    pub images_new: usize,
+    pub aliases_new: usize,
     pub carts_new: usize,
     pub carts_existing: usize,
     pub cart_lines: usize,
@@ -45,13 +55,13 @@ impl std::fmt::Display for ImportReport {
         writeln!(f, "bringfast {mode}")?;
         writeln!(
             f,
-            "invoices: {} new, {} already stored, {} lines",
-            self.invoices_new, self.invoices_existing, self.lines
+            "invoices: {} new, {} updated, {} already stored, {} lines",
+            self.invoices_new, self.invoices_updated, self.invoices_existing, self.lines
         )?;
         writeln!(
             f,
-            "products: {} new, {} already stored",
-            self.products_new, self.products_existing
+            "products: {} new, {} already stored, {} images, {} aliases",
+            self.products_new, self.products_existing, self.images_new, self.aliases_new
         )?;
         writeln!(
             f,
@@ -79,7 +89,7 @@ impl std::fmt::Display for ImportReport {
 }
 
 impl App {
-    pub fn import_bringfast(&self, path: &Path, dry_run: bool) -> Result<ImportReport> {
+    pub fn import_bringfast(&self, path: &Path, options: &BringfastImport) -> Result<ImportReport> {
         if !path.is_file() {
             return Err(Error::Message(format!(
                 "no Bring Fast database at {}",
@@ -89,12 +99,15 @@ impl App {
         let source = open_source(path)?;
         let key = master_key(path);
         let mut report = ImportReport {
-            dry_run,
+            dry_run: options.dry_run,
             invoices_new: 0,
+            invoices_updated: 0,
             invoices_existing: 0,
             lines: 0,
             products_new: 0,
             products_existing: 0,
+            images_new: 0,
+            aliases_new: 0,
             carts_new: 0,
             carts_existing: 0,
             cart_lines: 0,
@@ -106,24 +119,33 @@ impl App {
             skipped_stores: Vec::new(),
             note: String::new(),
         };
-        if key.is_none() && table_exists(&source, "retailer_accounts") {
+        if options.store_accounts && key.is_none() && table_exists(&source, "retailer_accounts") {
             report.note =
                 "store passwords were left untouched (master.key was not next to the database)"
                     .into();
         }
+        if !options.store_accounts && report.note.is_empty() {
+            report.note =
+                "store sign-ins were left untouched (pass --with-store-accounts to import them)"
+                    .into();
+        }
+        let receipts = options.receipts_dir.clone();
         self.with_conn(|dest| {
-            import_invoices(&source, dest, dry_run, &mut report)?;
-            import_products(&source, dest, dry_run, &mut report)?;
-            import_carts(&source, dest, dry_run, &mut report)?;
-            import_shopping(&source, dest, dry_run, &mut report)?;
-            import_accounts(
-                &source,
-                dest,
-                dry_run,
-                &self.machine_key,
-                key.as_deref(),
-                &mut report,
-            )?;
+            import_invoices(&source, dest, self, options.dry_run, receipts.as_deref(), &mut report)?;
+            import_products(&source, dest, self, options.dry_run, receipts.as_deref(), &mut report)?;
+            import_aliases(&source, dest, options.dry_run, &mut report)?;
+            import_carts(&source, dest, options.dry_run, &mut report)?;
+            import_shopping(&source, dest, options.dry_run, &mut report)?;
+            if options.store_accounts {
+                import_accounts(
+                    &source,
+                    dest,
+                    options.dry_run,
+                    &self.machine_key,
+                    key.as_deref(),
+                    &mut report,
+                )?;
+            }
             Ok(())
         })?;
         report.skipped_stores.sort();
@@ -191,7 +213,9 @@ fn table_exists(conn: &Connection, name: &str) -> bool {
 fn import_invoices(
     source: &Connection,
     dest: &Connection,
+    app: &App,
     dry_run: bool,
+    receipts_dir: Option<&Path>,
     report: &mut ImportReport,
 ) -> Result<()> {
     if !table_exists(source, "invoices") {
@@ -225,25 +249,39 @@ fn import_invoices(
         } else {
             suffix
         };
-        if invoice_exists(dest, &key.0, &key.1)? {
-            report.invoices_existing += 1;
-            continue;
-        }
         let lines = invoice_lines(source, id)?;
         let total: f64 = lines.iter().map(|line| line.line_total).sum();
-        let purchased = invoice_date
-            .unwrap_or_default()
-            .chars()
-            .take(10)
-            .collect::<String>();
-        let purchased = if purchased.len() == 10 {
-            purchased
-        } else {
-            "1970-01-01".into()
-        };
+        let purchased = flexible_invoice_date(invoice_date.as_deref());
+        if let Some((invoice_id, old_date)) = existing_invoice(dest, &key.0, &key.1)? {
+            let date_missing = old_date.is_empty() || old_date == "1970-01-01";
+            let replace_date = purchased != "1970-01-01" && (date_missing || purchased != old_date);
+            if replace_date {
+                report.invoices_updated += 1;
+            } else {
+                report.invoices_existing += 1;
+            }
+            report.lines += lines.len();
+            if !dry_run {
+                if replace_date {
+                    dest.execute(
+                        "UPDATE invoices SET purchased_on = ?1, total = ?2 WHERE id = ?3",
+                        params![purchased, total, invoice_id],
+                    )?;
+                }
+                dest.execute(
+                    "DELETE FROM invoice_lines WHERE invoice_id = ?1",
+                    params![invoice_id],
+                )?;
+                write_lines(dest, app, invoice_id, &lines, receipts_dir, dry_run, report)?;
+            }
+            continue;
+        }
         report.invoices_new += 1;
         report.lines += lines.len();
         if dry_run {
+            for line in &lines {
+                consider_image(dest, app, line, receipts_dir, true, report)?;
+            }
             continue;
         }
         dest.execute(
@@ -251,12 +289,44 @@ fn import_invoices(
             params![key.0, key.1, purchased, total],
         )?;
         let invoice_id = dest.last_insert_rowid();
-        for line in lines {
+        write_lines(dest, app, invoice_id, &lines, receipts_dir, false, report)?;
+    }
+    Ok(())
+}
+
+fn flexible_invoice_date(raw: Option<&str>) -> String {
+    raw.and_then(crate::household::flexible_day)
+        .map(|day| day.format("%Y-%m-%d").to_string())
+        .unwrap_or_else(|| "1970-01-01".into())
+}
+
+fn existing_invoice(dest: &Connection, store: &str, invoice_no: &str) -> Result<Option<(i64, String)>> {
+    dest.query_row(
+        "SELECT id, purchased_on FROM invoices WHERE store = ?1 AND invoice_no = ?2",
+        params![store, invoice_no],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )
+    .optional()
+    .map_err(Error::from)
+}
+
+fn write_lines(
+    dest: &Connection,
+    app: &App,
+    invoice_id: i64,
+    lines: &[Line],
+    receipts_dir: Option<&Path>,
+    dry_run: bool,
+    report: &mut ImportReport,
+) -> Result<()> {
+    for line in lines {
+        if !dry_run {
             dest.execute(
-                "INSERT INTO invoice_lines (invoice_id, name, name_key, qty, unit, unit_price, line_total) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                params![invoice_id, line.name, crate::model::normalize_name(&line.name), line.qty, line.unit, line.unit_price, line.line_total],
+                "INSERT INTO invoice_lines (invoice_id, name, name_key, qty, unit, unit_price, line_total, product_key) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![invoice_id, line.name, crate::model::normalize_name(&line.name), line.qty, line.unit, line.unit_price, line.line_total, line.product_key],
             )?;
         }
+        consider_image(dest, app, line, receipts_dir, dry_run, report)?;
     }
     Ok(())
 }
@@ -267,6 +337,8 @@ struct Line {
     unit: String,
     unit_price: f64,
     line_total: f64,
+    product_key: String,
+    image_url: String,
 }
 
 fn invoice_lines(source: &Connection, invoice_id: i64) -> Result<Vec<Line>> {
@@ -274,7 +346,7 @@ fn invoice_lines(source: &Connection, invoice_id: i64) -> Result<Vec<Line>> {
         return Ok(Vec::new());
     }
     let mut stmt = source.prepare(
-        "SELECT name, qty, unit_price, line_total FROM invoice_items WHERE invoice_id = ?1 ORDER BY id",
+        "SELECT name, qty, unit_price, line_total, ifnull(product_key, ''), ifnull(image_url, '') FROM invoice_items WHERE invoice_id = ?1 ORDER BY id",
     )?;
     let rows = stmt.query_map(params![invoice_id], |row| {
         Ok((
@@ -282,11 +354,13 @@ fn invoice_lines(source: &Connection, invoice_id: i64) -> Result<Vec<Line>> {
             row.get::<_, f64>(1)?,
             row.get::<_, Option<f64>>(2)?,
             row.get::<_, f64>(3)?,
+            row.get::<_, String>(4)?,
+            row.get::<_, String>(5)?,
         ))
     })?;
     let mut lines = Vec::new();
     for row in rows {
-        let (name, qty, unit_price, line_total) = row?;
+        let (name, qty, unit_price, line_total, product_key, image_url) = row?;
         let qty = if qty <= 0.0 { 1.0 } else { qty };
         let unit_price = unit_price.unwrap_or_else(|| line_total / qty);
         lines.push(Line {
@@ -295,26 +369,112 @@ fn invoice_lines(source: &Connection, invoice_id: i64) -> Result<Vec<Line>> {
             qty,
             unit_price,
             line_total,
+            product_key,
+            image_url,
         });
     }
     Ok(lines)
 }
 
-fn invoice_exists(dest: &Connection, store: &str, invoice_no: &str) -> Result<bool> {
+fn consider_image(
+    dest: &Connection,
+    app: &App,
+    line: &Line,
+    receipts_dir: Option<&Path>,
+    dry_run: bool,
+    report: &mut ImportReport,
+) -> Result<()> {
+    let key = if line.product_key.trim().is_empty() {
+        crate::model::normalize_name(&line.name)
+    } else {
+        line.product_key.trim().to_string()
+    };
+    if image_known(dest, &key)? {
+        return Ok(());
+    }
+    let bytes = locate_image(line, receipts_dir, &key);
+    let Some(bytes) = bytes else {
+        return Ok(());
+    };
+    report.images_new += 1;
+    if dry_run {
+        return Ok(());
+    }
+    write_image(dest, app, &key, &line.image_url, &bytes)?;
+    let name_key = crate::model::normalize_name(&line.name);
+    if key != name_key {
+        write_image(dest, app, &name_key, &line.image_url, &bytes)?;
+    }
+    Ok(())
+}
+
+fn image_known(dest: &Connection, key: &str) -> Result<bool> {
     Ok(dest
         .query_row(
-            "SELECT 1 FROM invoices WHERE store = ?1 AND invoice_no = ?2",
-            params![store, invoice_no],
+            "SELECT 1 FROM product_images WHERE name_key = ?1",
+            params![key],
             |_| Ok(()),
         )
         .optional()?
         .is_some())
 }
 
+fn write_image(
+    dest: &Connection,
+    app: &App,
+    key: &str,
+    source: &str,
+    bytes: &[u8],
+) -> Result<()> {
+    let Some(ext) = crate::household::image_ext(bytes) else {
+        return Ok(());
+    };
+    let file_name = format!("{}.{}", crate::household::safe_key(key), ext);
+    let dir = app.data_dir().join("product-images");
+    fs::create_dir_all(&dir)?;
+    fs::write(dir.join(&file_name), bytes)?;
+    dest.execute(
+        "INSERT INTO product_images (name_key, path, source_url) VALUES (?1, ?2, ?3)
+         ON CONFLICT(name_key) DO UPDATE SET path = excluded.path",
+        params![key, file_name, source],
+    )?;
+    Ok(())
+}
+
+fn locate_image(line: &Line, receipts_dir: Option<&Path>, key: &str) -> Option<Vec<u8>> {
+    let mut candidates = Vec::new();
+    if let Some(dir) = receipts_dir {
+        let safe = crate::household::safe_key(key);
+        for ext in ["webp", "png", "jpg", "jpeg", "gif"] {
+            candidates.push(dir.join(format!("{safe}.{ext}")));
+            candidates.push(dir.join("product-images").join(format!("{safe}.{ext}")));
+        }
+    }
+    if !line.image_url.is_empty() {
+        let url = Path::new(&line.image_url);
+        if url.is_file() {
+            candidates.push(url.to_path_buf());
+        }
+    }
+    for path in candidates {
+        if let Ok(bytes) = fs::read(&path) {
+            if crate::household::image_ext(&bytes).is_some() {
+                return Some(bytes);
+            }
+        }
+    }
+    if line.image_url.starts_with("http://") || line.image_url.starts_with("https://") {
+        return crate::household::fetch_image(&line.image_url);
+    }
+    None
+}
+
 fn import_products(
     source: &Connection,
     dest: &Connection,
+    app: &App,
     dry_run: bool,
+    receipts_dir: Option<&Path>,
     report: &mut ImportReport,
 ) -> Result<()> {
     if !table_exists(source, "product_meta") {
@@ -339,17 +499,71 @@ fn import_products(
         if name.trim().is_empty() {
             continue;
         }
+        let image_url = image.clone().unwrap_or_default();
         if row_exists(dest, "products", "product_key", &key)? {
             report.products_existing += 1;
+        } else {
+            report.products_new += 1;
+            if !dry_run {
+                dest.execute(
+                    "INSERT INTO products (product_key, sku, name, category, image_url, source) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![key, sku, name, category, image, source_name],
+                )?;
+            }
+        }
+        if !image_url.is_empty() {
+            let line = Line {
+                name,
+                qty: 1.0,
+                unit: String::new(),
+                unit_price: 0.0,
+                line_total: 0.0,
+                product_key: key,
+                image_url,
+            };
+            consider_image(dest, app, &line, receipts_dir, dry_run, report)?;
+        }
+    }
+    Ok(())
+}
+
+fn import_aliases(
+    source: &Connection,
+    dest: &Connection,
+    dry_run: bool,
+    report: &mut ImportReport,
+) -> Result<()> {
+    if !table_exists(source, "product_aliases") {
+        return Ok(());
+    }
+    let mut stmt =
+        source.prepare("SELECT alias_key, canonical_key FROM product_aliases")?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    for row in rows {
+        let (alias, canonical) = row?;
+        if alias.trim().is_empty() || canonical.trim().is_empty() {
             continue;
         }
-        report.products_new += 1;
+        let exists = dest
+            .query_row(
+                "SELECT canonical_key FROM product_aliases WHERE alias_key = ?1",
+                params![alias],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        if exists.as_deref() == Some(canonical.as_str()) {
+            continue;
+        }
+        report.aliases_new += 1;
         if dry_run {
             continue;
         }
         dest.execute(
-            "INSERT INTO products (product_key, sku, name, category, image_url, source) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![key, sku, name, category, image, source_name],
+            "INSERT INTO product_aliases (alias_key, canonical_key) VALUES (?1, ?2)
+             ON CONFLICT(alias_key) DO UPDATE SET canonical_key = excluded.canonical_key",
+            params![alias, canonical],
         )?;
     }
     Ok(())
@@ -794,6 +1008,10 @@ CREATE TABLE product_meta (
     image_url TEXT,
     source TEXT
 );
+CREATE TABLE product_aliases (
+    alias_key TEXT PRIMARY KEY,
+    canonical_key TEXT NOT NULL
+);
 CREATE TABLE carts (
     user_id INTEGER NOT NULL,
     retailer TEXT NOT NULL,
@@ -1036,6 +1254,7 @@ fn insert_tuple(
         "invoices"
             | "invoice_items"
             | "product_meta"
+            | "product_aliases"
             | "carts"
             | "forecast_votes"
             | "forecast_exclusions"
@@ -1062,6 +1281,12 @@ fn insert_tuple(
             conn.execute(
                 "INSERT INTO invoice_items (id, invoice_id, barcode, name, qty, unit_price, line_total, image_url, product_key) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 params![get("id"), get("invoice_id"), opt(&known, "barcode"), get("name"), get("qty"), opt(&known, "unit_price"), get("line_total"), opt(&known, "image_url"), get("product_key")],
+            )?;
+        }
+        "product_aliases" => {
+            conn.execute(
+                "INSERT OR REPLACE INTO product_aliases (alias_key, canonical_key) VALUES (?1, ?2)",
+                params![get("alias_key"), get("canonical_key")],
             )?;
         }
         "product_meta" => {
@@ -1169,7 +1394,12 @@ mod tests {
         fs::write(dir.path().join("master.key"), &key).unwrap();
         sample_db(&source, &key);
         let app = App::open(dir.path().join("oma")).unwrap();
-        let preview = app.import_bringfast(&source, true).unwrap();
+        let options = BringfastImport {
+            dry_run: true,
+            receipts_dir: None,
+            store_accounts: true,
+        };
+        let preview = app.import_bringfast(&source, &options).unwrap();
         assert!(preview.dry_run);
         assert_eq!(preview.invoices_new, 1);
         assert_eq!(preview.lines, 1);
@@ -1183,10 +1413,15 @@ mod tests {
         assert!(text.contains("dry-run"));
         assert!(text.contains("invoices: 1 new"));
 
-        let done = app.import_bringfast(&source, false).unwrap();
+        let write = BringfastImport {
+            dry_run: false,
+            receipts_dir: None,
+            store_accounts: true,
+        };
+        let done = app.import_bringfast(&source, &write).unwrap();
         assert_eq!(done.invoices_new, 1);
         assert_eq!(done.accounts_new, 1);
-        let again = app.import_bringfast(&source, false).unwrap();
+        let again = app.import_bringfast(&source, &write).unwrap();
         assert_eq!(again.invoices_new, 0);
         assert_eq!(again.invoices_existing, 1);
         assert_eq!(again.products_existing, 1);
@@ -1216,11 +1451,61 @@ COPY public.invoice_items (id, invoice_id, barcode, name, qty, unit_price, line_
         )
         .unwrap();
         let app = App::open(dir.path().join("oma")).unwrap();
-        let report = app.import_bringfast(&dump, false).unwrap();
+        let report = app
+            .import_bringfast(
+                &dump,
+                &BringfastImport {
+                    dry_run: false,
+                    receipts_dir: None,
+                    store_accounts: false,
+                },
+            )
+            .unwrap();
         assert_eq!(report.invoices_new, 1);
         assert_eq!(report.lines, 1);
         let invoices = app.list_invoices().unwrap();
         assert_eq!(invoices[0].invoice_no, "W-9");
+        assert_eq!(invoices[0].purchased_on, "2026-04-02");
         assert_eq!(invoices[0].store, StoreId::Waitrose);
+    }
+
+    #[test]
+    fn reimport_backfills_the_invoice_date() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("bringfast.db");
+        let conn = Connection::open(&source).unwrap();
+        conn.execute_batch(MEMORY_SCHEMA).unwrap();
+        conn.execute(
+            "INSERT INTO invoices (id, user_id, retailer, invoice_no, invoice_date) VALUES (1, 1, 'carrefour', '1001', NULL)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO invoice_items (id, invoice_id, name, qty, unit_price, line_total, product_key, image_url) VALUES (1, 1, 'Milk', 1, 8, 8, 'milk', '')",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+        let app = App::open(dir.path().join("oma")).unwrap();
+        let write = BringfastImport {
+            dry_run: false,
+            receipts_dir: None,
+            store_accounts: false,
+        };
+        app.import_bringfast(&source, &write).unwrap();
+        assert_eq!(app.list_invoices().unwrap()[0].purchased_on, "1970-01-01");
+        let conn = Connection::open(&source).unwrap();
+        conn.execute(
+            "UPDATE invoices SET invoice_date = '2024-11-03T18:00:00Z' WHERE id = 1",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+        let again = app.import_bringfast(&source, &write).unwrap();
+        assert_eq!(again.invoices_new, 0);
+        assert_eq!(again.invoices_updated, 1);
+        let invoices = app.list_invoices().unwrap();
+        assert_eq!(invoices.len(), 1);
+        assert_eq!(invoices[0].purchased_on, "2024-11-03");
     }
 }

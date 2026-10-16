@@ -285,6 +285,8 @@ pub struct InvoiceLine {
     pub unit: String,
     pub unit_price: f64,
     pub line_total: f64,
+    #[serde(default)]
+    pub product_key: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

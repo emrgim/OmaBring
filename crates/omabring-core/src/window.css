@@ -194,9 +194,29 @@ window.omabring .bf-dash {
   padding: 10px 12px 8px;
 }
 
-window.omabring .bf-filters {
+window.omabring .bf-filters,
+window.omabring .bf-pin {
+  background-color: var(--omabring-bg);
   border-bottom: 1px solid var(--omabring-line);
-  padding: 0 0 8px;
+  padding: 8px 16px 10px;
+}
+
+window.omabring .bf-agent {
+  background-color: transparent;
+  border: 1px solid var(--omabring-line);
+  padding: 4px;
+  min-width: 34px;
+  min-height: 34px;
+}
+
+window.omabring .bf-logo-sm {
+  min-width: 22px;
+  min-height: 22px;
+  font-size: 11px;
+}
+
+window.omabring picture.bf-thumb {
+  background-color: transparent;
 }
 
 window.omabring .bf-theme {
