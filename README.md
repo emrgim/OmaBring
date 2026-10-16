@@ -2,7 +2,7 @@
 
 OmaBring is a native desktop app for [Omarchy](https://omarchy.org) (Arch Linux and Hyprland). It is a personal UAE grocery shopper on this machine: link store accounts, search and compare prices, keep carts, prepare checkout, import receipts, and see spending plus what to buy again.
 
-The window is GTK 4 and libadwaita. It follows the active Omarchy theme and runs as a Wayland application. Dashboard, Purchases, Stores, and Settings sit under one header: spend bars, a product table, store cards, a cart, and the local service address. A background service on this machine exposes the same features to an approved client over MCP, with OAuth.
+The window is GTK 4 and libadwaita. It follows the active Omarchy theme and runs as a Wayland application. It opens on Search. Dashboard, Purchases, Stores, Settings, and Forecast sit on the same header: a product search, spend bars, a product table, store cards, a cart, and the local service address. Alt+1 through Alt+6, or Up and Down, move between those views. Enter activates the focused header tab. A background service on this machine exposes the same features to an approved client over MCP, with OAuth.
 
 ## Features
 
@@ -15,7 +15,7 @@ The window is GTK 4 and libadwaita. It follows the active Omarchy theme and runs
 
 ## Omarchy
 
-The app reads the active theme from `~/.config/omarchy/current/theme`, then from `~/.local/state/omarchy/current/theme`. Colors come from `colors.toml` when it is present, and otherwise from `alacritty.toml`, `walker.css`, or the waybar stylesheet in that directory. The monospace face comes from `~/.config/fontconfig/fonts.conf` (the file Omarchy writes when the font changes), then from the terminal font config. Those colors become the window background, foreground, accent, borders, and selection. The window is flat and compact, with no title-bar chrome, so it sits in a Hyprland tile. `OMABRING_THEME` can point at a theme directory or a color file. `OMABRING_NO_CSS=1` skips that stylesheet and the color-scheme update.
+The app reads the active theme from `~/.config/omarchy/current/theme` when that directory has colors, and otherwise from `~/.local/state/omarchy/current/theme`. A machine that only has the state path, with no `~/.config/omarchy/current`, still picks up the theme. Colors come from `colors.toml` when it is present, and otherwise from `alacritty.toml`, `walker.css`, or the waybar stylesheet in that directory. The monospace face comes from `~/.config/fontconfig/fonts.conf` (the file Omarchy writes when the font changes), then from the terminal font config. Those colors become the window background, foreground, accent, borders, and selection. The window is flat and compact, with no title-bar chrome, so it sits in a Hyprland tile. `OMABRING_THEME` can point at a theme directory or a color file. `OMABRING_NO_CSS=1` skips that stylesheet and the color-scheme update.
 
 The theme directory is watched. Switching theme with `omarchy-theme-set`, or changing the font config, restyles the open window.
 
@@ -106,7 +106,7 @@ cargo test --workspace
 cargo build --release
 ```
 
-`omabring --version` prints the version. `omabring --print-theme` prints the CSS taken from the active Omarchy theme. `omabring --smoke` opens the window and closes it, for a display check. `OMABRING_PAGE` opens `dashboard`, `purchases`, `stores`, `settings`, `store`, or `product`. `OMABRING_DEMO=1` loads sample receipts only when the receipt list is empty.
+`omabring --version` prints the version. `omabring --print-theme` prints the CSS taken from the active Omarchy theme. `omabring --search milk` prints matching products as tab-separated lines (`store`, name, price, source) and does not open a window, so it can run over SSH. With no matches it prints `no matching products`. `omabring --view search` prints `view search`, the store count, and the receipt count. View names are `search`, `dashboard`, `purchases` (`receipts`), `stores` (`carts`, `store`), `settings` (`service`), `forecast`, and `product`. `omabring --smoke` opens the window and closes it, for a display check. The window opens on Search. `OMABRING_PAGE` can select `search`, `dashboard`, `purchases`, `stores`, `settings`, `forecast`, `store`, or `product`. `OMABRING_DEMO=1` loads sample receipts only when the receipt list is empty. The receipt import box stays empty until a receipt is pasted.
 
 ## Layout
 

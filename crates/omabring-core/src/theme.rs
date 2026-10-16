@@ -306,6 +306,10 @@ window.omabring button.bf-tab.on label {{
   border-color: var(--omabring-accent);
 }}
 
+window.omabring button.bf-tab:focus {{
+  border-color: var(--omabring-accent);
+}}
+
 window.omabring .bf-card {{
   background-color: var(--omabring-surface);
   color: var(--omabring-fg);
@@ -1219,6 +1223,24 @@ selection_background = "#d0d8e8"
         assert_eq!(palette.background, "#111111");
         let watched = theme_watch_paths(home.path());
         assert!(watched.iter().any(|path| path.ends_with("omarchy/current")));
+    }
+
+    #[test]
+    fn resolves_state_theme_when_config_current_is_absent() {
+        let home = tempfile::tempdir().unwrap();
+        let state = home.path().join(".local/state/omarchy/current/theme");
+        fs::create_dir_all(&state).unwrap();
+        fs::write(
+            state.join("colors.toml"),
+            "background = \"#abcdef\"\nforeground = \"#111111\"\n",
+        )
+        .unwrap();
+        let dir = resolve_theme_dir_at(home.path(), None).unwrap();
+        assert_eq!(dir, state);
+        let palette = load_palette_path(&dir).unwrap();
+        assert_eq!(palette.background, "#abcdef");
+        let watched = theme_watch_paths(home.path());
+        assert!(watched.iter().any(|path| path == &state));
     }
 
     #[test]

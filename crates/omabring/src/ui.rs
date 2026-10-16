@@ -14,8 +14,8 @@ use gtk4 as gtk;
 use libadwaita as adw;
 use libadwaita::prelude::*;
 use omabring_core::{
-    home_dir, load_active_palette, theme_watch_paths, App, CartLine, InvoiceSummary, Offer,
-    StoreId, StoreSecrets,
+    home_dir, load_active_palette, theme_watch_paths, App, CartLine, ForecastStatus,
+    InvoiceSummary, Offer, StoreId, StoreSecrets,
 };
 use omabring_stores::Registry;
 
@@ -38,10 +38,12 @@ enum SortKey {
 
 #[derive(Clone, PartialEq, Eq)]
 enum Page {
+    Search,
     Dashboard,
     Purchases,
     Stores,
     Settings,
+    Forecast,
     Store(StoreId),
     Product(String),
 }
@@ -52,10 +54,13 @@ struct Shell {
     window: adw::ApplicationWindow,
     toast: adw::ToastOverlay,
     content: gtk::Box,
+    tab_search: gtk::Button,
     tab_dash: gtk::Button,
     tab_buy: gtk::Button,
     tab_stores: gtk::Button,
     tab_settings: gtk::Button,
+    tab_forecast: gtk::Button,
+    search_entry: gtk::Entry,
     mode_label: gtk::Label,
     service_label: gtk::Label,
     page: Page,
@@ -71,6 +76,12 @@ struct Shell {
     compare: Vec<Offer>,
     compare_note: String,
     compare_for: String,
+    search_query: String,
+    search_note: String,
+    search_offers: Vec<Offer>,
+    search_started: String,
+    focus_nav: bool,
+    focus_query: bool,
     consent_open: Rc<Cell<bool>>,
 }
 
@@ -114,6 +125,7 @@ pub fn open_window(app: &adw::Application, core: Arc<App>, backend: Arc<Registry
     toast.set_child(Some(&root));
     window.set_content(Some(&toast));
     render(&shell);
+    install_keys(&window, &shell);
     window.present();
 
     let shell_for_consent = shell.clone();
@@ -245,19 +257,27 @@ fn build_chrome(
     service.set_xalign(0.0);
     service.set_selectable(true);
     wrap_label(&service);
-    Rc::new(RefCell::new(Shell {
+    let search_entry = gtk::Entry::new();
+    search_entry.set_placeholder_text(Some("Product"));
+    search_entry.set_hexpand(true);
+    let page = initial_page();
+    let focus_query = matches!(page, Page::Search);
+    let shell = Rc::new(RefCell::new(Shell {
         core,
         backend,
         window: window.clone(),
         toast: toast.clone(),
         content: gtk::Box::new(gtk::Orientation::Vertical, 12),
+        tab_search: tab("SEARCH"),
         tab_dash: tab("DASHBOARD"),
         tab_buy: tab("PURCHASES"),
         tab_stores: tab("STORES"),
         tab_settings: tab("SETTINGS"),
+        tab_forecast: tab("FORECAST"),
+        search_entry,
         mode_label: mode,
         service_label: service,
-        page: initial_page(),
+        page: page.clone(),
         grain: Grain::Weekly,
         range_days: 30,
         custom: false,
@@ -270,8 +290,18 @@ fn build_chrome(
         compare: Vec::new(),
         compare_note: String::new(),
         compare_for: String::new(),
+        search_query: String::new(),
+        search_note: String::new(),
+        search_offers: Vec::new(),
+        search_started: String::new(),
+        focus_nav: !focus_query,
+        focus_query,
         consent_open: Rc::new(Cell::new(false)),
-    }))
+    }));
+    let shell_entry = shell.clone();
+    let entry = shell.borrow().search_entry.clone();
+    entry.connect_activate(move |entry| run_search(&shell_entry, entry));
+    shell
 }
 
 fn chrome_root(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
@@ -302,22 +332,23 @@ fn chrome_root(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
     let tabs = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     {
         let shell_ref = shell.borrow();
+        tabs.append(&shell_ref.tab_search);
         tabs.append(&shell_ref.tab_dash);
         tabs.append(&shell_ref.tab_buy);
         tabs.append(&shell_ref.tab_stores);
         tabs.append(&shell_ref.tab_settings);
+        tabs.append(&shell_ref.tab_forecast);
     }
     let go = |shell: &Rc<RefCell<Shell>>, button: &gtk::Button, page: Page| {
         let shell = shell.clone();
-        button.connect_clicked(move |_| {
-            shell.borrow_mut().page = page.clone();
-            schedule(&shell);
-        });
+        button.connect_clicked(move |_| select_page(&shell, page.clone()));
     };
+    go(shell, &shell.borrow().tab_search, Page::Search);
     go(shell, &shell.borrow().tab_dash, Page::Dashboard);
     go(shell, &shell.borrow().tab_buy, Page::Purchases);
     go(shell, &shell.borrow().tab_stores, Page::Stores);
     go(shell, &shell.borrow().tab_settings, Page::Settings);
+    go(shell, &shell.borrow().tab_forecast, Page::Forecast);
 
     header.append(&mark);
     header.append(&brand);
@@ -351,6 +382,8 @@ fn schedule(shell: &Rc<RefCell<Shell>>) {
 }
 
 fn render(shell: &Rc<RefCell<Shell>>) {
+    let restore_entry =
+        matches!(shell.borrow().page, Page::Search) && shell.borrow().search_entry.has_focus();
     let content = shell.borrow().content.clone();
     while let Some(child) = content.first_child() {
         content.remove(&child);
@@ -358,14 +391,26 @@ fn render(shell: &Rc<RefCell<Shell>>) {
     update_tabs(shell);
     let page = shell.borrow().page.clone();
     let body: gtk::Widget = match page {
+        Page::Search => search_page(shell).upcast(),
         Page::Dashboard => board(shell, false).upcast(),
         Page::Purchases => purchases(shell).upcast(),
         Page::Stores => stores_page(shell).upcast(),
         Page::Settings => settings_page(shell).upcast(),
+        Page::Forecast => forecast_page(shell).upcast(),
         Page::Store(id) => store_page(shell, id).upcast(),
         Page::Product(_) => product_page(shell).upcast(),
     };
     content.append(&body);
+    if restore_entry {
+        shell.borrow_mut().focus_query = true;
+    }
+    if shell.borrow().focus_nav || shell.borrow().focus_query {
+        let shell = shell.clone();
+        glib::idle_add_local(move || {
+            apply_focus(&shell);
+            ControlFlow::Break
+        });
+    }
 }
 
 fn update_tabs(shell: &Rc<RefCell<Shell>>) {
@@ -378,6 +423,7 @@ fn update_tabs(shell: &Rc<RefCell<Shell>>) {
             button.remove_css_class("on");
         }
     };
+    mark(&shell_ref.tab_search, page == Page::Search);
     mark(&shell_ref.tab_dash, page == Page::Dashboard);
     mark(
         &shell_ref.tab_buy,
@@ -388,6 +434,284 @@ fn update_tabs(shell: &Rc<RefCell<Shell>>) {
         matches!(page, Page::Stores | Page::Store(_)),
     );
     mark(&shell_ref.tab_settings, page == Page::Settings);
+    mark(&shell_ref.tab_forecast, page == Page::Forecast);
+}
+
+fn select_page(shell: &Rc<RefCell<Shell>>, page: Page) {
+    let mut state = shell.borrow_mut();
+    state.focus_query = matches!(page, Page::Search);
+    state.focus_nav = !matches!(page, Page::Search);
+    state.page = page;
+    drop(state);
+    schedule(shell);
+}
+
+fn nav_slot(page: &Page) -> usize {
+    match page {
+        Page::Search => 0,
+        Page::Dashboard => 1,
+        Page::Purchases | Page::Product(_) => 2,
+        Page::Stores | Page::Store(_) => 3,
+        Page::Settings => 4,
+        Page::Forecast => 5,
+    }
+}
+
+fn page_at(index: usize) -> Page {
+    match index % 6 {
+        0 => Page::Search,
+        1 => Page::Dashboard,
+        2 => Page::Purchases,
+        3 => Page::Stores,
+        4 => Page::Settings,
+        _ => Page::Forecast,
+    }
+}
+
+fn page_from(value: Option<&str>) -> Page {
+    match value {
+        Some("dashboard") => Page::Dashboard,
+        Some("purchases") | Some("receipts") => Page::Purchases,
+        Some("stores") | Some("carts") => Page::Stores,
+        Some("settings") | Some("service") => Page::Settings,
+        Some("store") => Page::Store(StoreId::Carrefour),
+        Some("product") => Page::Product("Milk".into()),
+        Some("forecast") => Page::Forecast,
+        _ => Page::Search,
+    }
+}
+
+fn tab_button(shell: &Shell) -> gtk::Button {
+    match &shell.page {
+        Page::Search => shell.tab_search.clone(),
+        Page::Dashboard => shell.tab_dash.clone(),
+        Page::Purchases | Page::Product(_) => shell.tab_buy.clone(),
+        Page::Stores | Page::Store(_) => shell.tab_stores.clone(),
+        Page::Settings => shell.tab_settings.clone(),
+        Page::Forecast => shell.tab_forecast.clone(),
+    }
+}
+
+fn apply_focus(shell: &Rc<RefCell<Shell>>) {
+    let (nav, query) = {
+        let mut state = shell.borrow_mut();
+        let nav = state.focus_nav;
+        let query = state.focus_query;
+        state.focus_nav = false;
+        state.focus_query = false;
+        (nav, query)
+    };
+    if query {
+        shell.borrow().search_entry.grab_focus();
+    } else if nav {
+        tab_button(&shell.borrow()).grab_focus();
+    }
+}
+
+fn in_text_view(window: &adw::ApplicationWindow) -> bool {
+    let mut current = gtk::prelude::RootExt::focus(window);
+    while let Some(widget) = current {
+        if widget.is::<gtk::TextView>() || widget.is::<gtk::Text>() {
+            return true;
+        }
+        current = widget.parent();
+    }
+    false
+}
+
+fn alt_index(key: gtk::gdk::Key) -> Option<usize> {
+    match key {
+        gtk::gdk::Key::_1 | gtk::gdk::Key::KP_1 => Some(0),
+        gtk::gdk::Key::_2 | gtk::gdk::Key::KP_2 => Some(1),
+        gtk::gdk::Key::_3 | gtk::gdk::Key::KP_3 => Some(2),
+        gtk::gdk::Key::_4 | gtk::gdk::Key::KP_4 => Some(3),
+        gtk::gdk::Key::_5 | gtk::gdk::Key::KP_5 => Some(4),
+        gtk::gdk::Key::_6 | gtk::gdk::Key::KP_6 => Some(5),
+        _ => None,
+    }
+}
+
+fn install_keys(window: &adw::ApplicationWindow, shell: &Rc<RefCell<Shell>>) {
+    let keys = gtk::EventControllerKey::new();
+    keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let shell = shell.clone();
+    keys.connect_key_pressed(move |_, key, _, state| {
+        if shell.borrow().consent_open.get() {
+            return glib::Propagation::Proceed;
+        }
+        if state.contains(gtk::gdk::ModifierType::ALT_MASK) {
+            if let Some(index) = alt_index(key) {
+                select_page(&shell, page_at(index));
+                return glib::Propagation::Stop;
+            }
+        }
+        let arrow = matches!(
+            key,
+            gtk::gdk::Key::Up | gtk::gdk::Key::KP_Up | gtk::gdk::Key::Down | gtk::gdk::Key::KP_Down
+        );
+        if arrow && !in_text_view(&shell.borrow().window) {
+            let current = nav_slot(&shell.borrow().page);
+            let next = if matches!(key, gtk::gdk::Key::Up | gtk::gdk::Key::KP_Up) {
+                (current + 5) % 6
+            } else {
+                (current + 1) % 6
+            };
+            select_page(&shell, page_at(next));
+            return glib::Propagation::Stop;
+        }
+        // Enter activates the focused tab through the button itself.
+        glib::Propagation::Proceed
+    });
+    window.add_controller(keys);
+}
+
+fn run_search(shell: &Rc<RefCell<Shell>>, entry: &gtk::Entry) {
+    let query = entry.text().trim().to_string();
+    {
+        let mut state = shell.borrow_mut();
+        state.search_query = query.clone();
+        state.search_started.clear();
+        state.focus_query = false;
+        state.focus_nav = false;
+        state.page = Page::Search;
+        if query.is_empty() {
+            state.search_offers.clear();
+            state.search_note = "Enter a product to search.".into();
+        }
+    }
+    schedule(shell);
+}
+
+fn search_page(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
+    let page = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    page.append(&heading_mark("", "SEARCH"));
+    let lead = gtk::Label::new(Some(
+        "Compare a product across the stores on this machine, then add it to a cart.",
+    ));
+    lead.add_css_class("bf-muted");
+    wrap_label(&lead);
+    page.append(&lead);
+
+    let query = shell.borrow().search_query.clone();
+    let started = shell.borrow().search_started.clone();
+    if !query.is_empty() && started != query {
+        shell.borrow_mut().search_started = query.clone();
+        shell.borrow_mut().search_offers.clear();
+        shell.borrow_mut().search_note = "Searching…".into();
+        let (core, backend) = {
+            let shell = shell.borrow();
+            (shell.core.clone(), shell.backend.clone())
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(core.search(&query, backend.as_ref()));
+        });
+        let shell_done = shell.clone();
+        let expected = shell.borrow().search_query.clone();
+        glib::idle_add_local(move || match rx.try_recv() {
+            Ok(result) => {
+                let mut state = shell_done.borrow_mut();
+                if state.search_query == expected {
+                    match result {
+                        Ok(comparison) => {
+                            let count = comparison.offers.len();
+                            state.search_offers = comparison.offers;
+                            state.search_note = if count == 0 {
+                                "No matching products.".into()
+                            } else {
+                                format!("{count} offers")
+                            };
+                        }
+                        Err(err) => state.search_note = err.to_string(),
+                    }
+                    let still = state.page == Page::Search;
+                    drop(state);
+                    if still {
+                        schedule(&shell_done);
+                    }
+                }
+                ControlFlow::Break
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => ControlFlow::Continue,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => ControlFlow::Break,
+        });
+    } else if query.is_empty() && shell.borrow().search_note.is_empty() {
+        shell.borrow_mut().search_note = "Enter a product to search.".into();
+    }
+
+    let find = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let entry = shell.borrow().search_entry.clone();
+    if entry.text().as_str() != shell.borrow().search_query {
+        entry.set_text(&shell.borrow().search_query);
+    }
+    let button = gtk::Button::with_label("SEARCH");
+    let shell_find = shell.clone();
+    let entry_find = entry.clone();
+    button.connect_clicked(move |_| run_search(&shell_find, &entry_find));
+    find.append(&entry);
+    find.append(&button);
+    page.append(&find);
+
+    let card = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    card.add_css_class("bf-card");
+    let note = gtk::Label::new(Some(&shell.borrow().search_note));
+    note.add_css_class("bf-muted");
+    note.set_xalign(0.0);
+    wrap_label(&note);
+    card.append(&note);
+    let offers = shell.borrow().search_offers.clone();
+    for offer in offers {
+        card.append(&offer_row(shell, &offer));
+    }
+    page.append(&card);
+    page
+}
+
+fn forecast_page(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
+    let page = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    page.append(&heading_mark("", "FORECAST"));
+    let lead = gtk::Label::new(Some(
+        "What to buy again, from receipts already on this machine.",
+    ));
+    lead.add_css_class("bf-muted");
+    wrap_label(&lead);
+    page.append(&lead);
+    let today = chrono::Utc::now().date_naive();
+    let items = shell.borrow().core.forecast(today).unwrap_or_default();
+    let card = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    card.add_css_class("bf-card");
+    if items.is_empty() {
+        let empty = gtk::Label::new(Some("Nothing to buy again yet."));
+        empty.add_css_class("bf-muted");
+        empty.set_xalign(0.0);
+        card.append(&empty);
+        page.append(&card);
+        return page;
+    }
+    for item in items {
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        row.add_css_class("bf-row");
+        let status = match item.status {
+            ForecastStatus::Overdue => "overdue",
+            ForecastStatus::DueToday => "due today",
+            ForecastStatus::DueSoon => "due soon",
+            ForecastStatus::Upcoming => "upcoming",
+        };
+        let label = gtk::Label::new(Some(&format!(
+            "{}   ·   {}   ·   {status}   ·   {}   ·   likely {}",
+            item.name,
+            store_label(item.store),
+            item.next_purchase,
+            item.likely
+        )));
+        label.set_hexpand(true);
+        label.set_xalign(0.0);
+        label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        row.append(&label);
+        card.append(&row);
+    }
+    page.append(&card);
+    page
 }
 
 fn open_product(shell: &Rc<RefCell<Shell>>, entry: &gtk::Entry) {
@@ -466,14 +790,11 @@ fn board(shell: &Rc<RefCell<Shell>>, purchases: bool) -> gtk::Box {
     titles.set_hexpand(true);
     titles.set_halign(gtk::Align::Start);
     if purchases {
-        let h1 = heading("PURCHASES", false);
+        let h1 = heading("PURCHASES");
         h1.add_css_class("bf-h1-sm");
         titles.append(&h1);
     } else {
-        titles.append(&heading(
-            "YOUR <span underline=\"single\">SPEND</span>",
-            true,
-        ));
+        titles.append(&heading_mark("YOUR ", "SPEND"));
     }
     top.append(&titles);
     top.append(&grain_row(shell));
@@ -775,10 +1096,7 @@ fn product_table(shell: &Rc<RefCell<Shell>>, products: &[Prod], full: bool) -> g
 
 fn stores_page(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
     let page = gtk::Box::new(gtk::Orientation::Vertical, 12);
-    page.append(&heading(
-        "YOUR <span underline=\"single\">STORES</span>",
-        true,
-    ));
+    page.append(&heading_mark("YOUR ", "STORES"));
     let lead = gtk::Label::new(Some(
         "Every store can be searched and compared. Open a store to link it, or to change the cart it holds.",
     ));
@@ -910,7 +1228,7 @@ fn store_page(shell: &Rc<RefCell<Shell>>, id: StoreId) -> gtk::Box {
     logo.set_size_request(64, 64);
     logo.set_xalign(0.5);
     logo.set_yalign(0.5);
-    let title = heading(&store_label(id).to_uppercase(), false);
+    let title = heading(&store_label(id).to_uppercase());
     head.append(&logo);
     head.append(&title);
     page.append(&head);
@@ -1204,7 +1522,7 @@ fn product_page(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
     thumb.set_xalign(0.5);
     thumb.set_yalign(0.5);
     hero.append(&thumb);
-    hero.append(&heading(&name.to_uppercase(), false));
+    hero.append(&heading(&name.to_uppercase()));
     page.append(&hero);
 
     let view = load_view(shell);
@@ -1239,59 +1557,63 @@ fn product_page(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
     card.append(&note);
     let offers = shell.borrow().compare.clone();
     for offer in offers {
-        let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        row.add_css_class("bf-row");
-        let source = match offer.source {
-            omabring_core::OfferSource::Live => "live",
-            omabring_core::OfferSource::History => "receipt",
-        };
-        let label = gtk::Label::new(Some(&format!(
-            "{}   ·   {}   ·   {:.2} {} / {}   ·   {source}",
-            offer.name,
-            store_label(offer.store),
-            offer.price,
-            offer.currency,
-            offer.unit
-        )));
-        label.set_hexpand(true);
-        label.set_xalign(0.0);
-        let add = gtk::Button::with_label("ADD");
-        let core = shell.borrow().core.clone();
-        let toast = shell.borrow().toast.clone();
-        let store = offer.store;
-        let product_id = offer.product_id.clone();
-        let offer_name = offer.name.clone();
-        let unit = offer.unit.clone();
-        let price = offer.price;
-        let currency = offer.currency.clone();
-        add.connect_clicked(move |_| {
-            match core.cart_add(
-                store,
-                &product_id,
-                &offer_name,
-                1.0,
-                &unit,
-                Some(price),
-                &currency,
-            ) {
-                Ok(_) => toast.add_toast(adw::Toast::new(&format!(
-                    "{offer_name} added to {}",
-                    store_label(store)
-                ))),
-                Err(err) => toast.add_toast(adw::Toast::new(&err.to_string())),
-            }
-        });
-        row.append(&label);
-        row.append(&add);
-        card.append(&row);
+        card.append(&offer_row(shell, &offer));
     }
     page.append(&card);
     page
 }
 
+fn offer_row(shell: &Rc<RefCell<Shell>>, offer: &Offer) -> gtk::Box {
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    row.add_css_class("bf-row");
+    let source = match offer.source {
+        omabring_core::OfferSource::Live => "live",
+        omabring_core::OfferSource::History => "receipt",
+    };
+    let label = gtk::Label::new(Some(&format!(
+        "{}   ·   {}   ·   {:.2} {} / {}   ·   {source}",
+        offer.name,
+        store_label(offer.store),
+        offer.price,
+        offer.currency,
+        offer.unit
+    )));
+    label.set_hexpand(true);
+    label.set_xalign(0.0);
+    let add = gtk::Button::with_label("ADD");
+    let core = shell.borrow().core.clone();
+    let toast = shell.borrow().toast.clone();
+    let store = offer.store;
+    let product_id = offer.product_id.clone();
+    let offer_name = offer.name.clone();
+    let unit = offer.unit.clone();
+    let price = offer.price;
+    let currency = offer.currency.clone();
+    add.connect_clicked(move |_| {
+        match core.cart_add(
+            store,
+            &product_id,
+            &offer_name,
+            1.0,
+            &unit,
+            Some(price),
+            &currency,
+        ) {
+            Ok(_) => toast.add_toast(adw::Toast::new(&format!(
+                "{offer_name} added to {}",
+                store_label(store)
+            ))),
+            Err(err) => toast.add_toast(adw::Toast::new(&err.to_string())),
+        }
+    });
+    row.append(&label);
+    row.append(&add);
+    row
+}
+
 fn settings_page(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
     let page = gtk::Box::new(gtk::Orientation::Vertical, 12);
-    page.append(&heading("<span underline=\"single\">SETTINGS</span>", true));
+    page.append(&heading_mark("", "SETTINGS"));
     let lead = gtk::Label::new(Some(
         "The local service on this machine. Allow or deny a client in this window.",
     ));
@@ -1325,12 +1647,12 @@ fn import_card(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
     let card = gtk::Box::new(gtk::Orientation::Vertical, 8);
     card.add_css_class("bf-card");
     card.add_css_class("bf-dashed");
+    let hint = gtk::Label::new(Some("Paste a JSON or CSV receipt"));
+    hint.add_css_class("bf-muted");
+    hint.set_xalign(0.0);
     let view = gtk::TextView::new();
     view.set_monospace(true);
     view.set_wrap_mode(gtk::WrapMode::WordChar);
-    view.buffer().set_text(
-        r#"{"store":"carrefour","invoice_no":"1001","date":"2026-03-01","currency":"AED","items":[{"name":"Milk","qty":1,"unit":"piece","unit_price":5.25}]}"#,
-    );
     let scroll = gtk::ScrolledWindow::builder()
         .child(&view)
         .min_content_height(120)
@@ -1355,6 +1677,7 @@ fn import_card(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
             Err(err) => shell_ref.toast.add_toast(adw::Toast::new(&err.to_string())),
         }
     });
+    card.append(&hint);
     card.append(&scroll);
     card.append(&button);
     let invoices = shell.borrow().core.list_invoices().unwrap_or_default();
@@ -1660,15 +1983,22 @@ fn parse_date(raw: &str) -> Option<NaiveDate> {
     NaiveDate::parse_from_str(raw.trim(), "%Y-%m-%d").ok()
 }
 
-fn heading(markup: &str, rich: bool) -> gtk::Label {
+fn heading(text: &str) -> gtk::Label {
     let label = gtk::Label::new(None);
     label.add_css_class("bf-h1");
     label.set_xalign(0.0);
-    if rich {
-        label.set_markup(markup);
-    } else {
-        label.set_text(markup);
-    }
+    label.set_text(text);
+    label
+}
+
+fn heading_mark(before: &str, word: &str) -> gtk::Label {
+    let label = heading("");
+    let markup = format!(
+        "{}<span underline=\"single\">{}</span>",
+        glib::markup_escape_text(before),
+        glib::markup_escape_text(word)
+    );
+    label.set_markup(&markup);
     label
 }
 
@@ -1806,7 +2136,7 @@ fn store_label(id: StoreId) -> &'static str {
         StoreId::Waitrose => "Waitrose UAE",
         StoreId::Spinneys => "Spinneys UAE",
         StoreId::Mmi => "MMI",
-        StoreId::AfricanEastern => "African + Eastern",
+        StoreId::AfricanEastern => "African & Eastern",
     }
 }
 
@@ -1847,14 +2177,7 @@ fn logo_class(id: StoreId) -> &'static str {
 }
 
 fn initial_page() -> Page {
-    match std::env::var("OMABRING_PAGE").ok().as_deref() {
-        Some("purchases") => Page::Purchases,
-        Some("stores") => Page::Stores,
-        Some("settings") => Page::Settings,
-        Some("store") => Page::Store(StoreId::Carrefour),
-        Some("product") => Page::Product("Milk".into()),
-        _ => Page::Dashboard,
-    }
+    page_from(std::env::var("OMABRING_PAGE").ok().as_deref())
 }
 
 fn seed_demo(core: &App) {
@@ -1911,13 +2234,11 @@ fn poll_consent(shell: &Rc<RefCell<Shell>>) {
         return;
     };
     shell_ref.consent_open.set(true);
-    let dialog = adw::AlertDialog::new(
-        Some("Allow a client to use OmaBring?"),
-        Some(&format!(
-            "{} wants to use your carts, receipts, search, and forecasts.",
-            request.client_name
-        )),
+    let body = format!(
+        "{} wants to use your carts, receipts, search, and forecasts.",
+        glib::markup_escape_text(&request.client_name)
     );
+    let dialog = adw::AlertDialog::new(Some("Allow a client to use OmaBring?"), Some(&body));
     dialog.add_css_class("omabring");
     dialog.add_response("deny", "Deny");
     dialog.add_response("allow", "Allow");
@@ -1933,4 +2254,45 @@ fn poll_consent(shell: &Rc<RefCell<Shell>>) {
         flag.set(false);
     });
     dialog.present(Some(&shell_ref.window));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{alt_index, nav_slot, page_at, page_from, Page};
+    use omabring_core::StoreId;
+
+    #[test]
+    fn window_opens_on_search() {
+        assert!(matches!(page_from(None), Page::Search));
+        assert!(matches!(page_from(Some("")), Page::Search));
+        assert!(matches!(page_from(Some("search")), Page::Search));
+        assert!(matches!(page_from(Some("dashboard")), Page::Dashboard));
+        assert!(matches!(page_from(Some("receipts")), Page::Purchases));
+        assert!(matches!(page_from(Some("service")), Page::Settings));
+        assert!(matches!(page_from(Some("forecast")), Page::Forecast));
+    }
+
+    #[test]
+    fn alt_numbers_follow_the_header() {
+        assert_eq!(nav_slot(&Page::Search), 0);
+        assert_eq!(nav_slot(&Page::Dashboard), 1);
+        assert_eq!(nav_slot(&Page::Purchases), 2);
+        assert_eq!(nav_slot(&Page::Product("Milk".into())), 2);
+        assert_eq!(nav_slot(&Page::Stores), 3);
+        assert_eq!(nav_slot(&Page::Store(StoreId::AfricanEastern)), 3);
+        assert_eq!(nav_slot(&Page::Settings), 4);
+        assert_eq!(nav_slot(&Page::Forecast), 5);
+        assert!(matches!(page_at(0), Page::Search));
+        assert!(matches!(page_at(5), Page::Forecast));
+        assert!(matches!(page_at(6), Page::Search));
+        assert_eq!(alt_index(gtk4::gdk::Key::_1), Some(0));
+        assert_eq!(alt_index(gtk4::gdk::Key::KP_6), Some(5));
+        assert_eq!(alt_index(gtk4::gdk::Key::a), None);
+    }
+
+    #[test]
+    fn markup_escapes_the_store_ampersand() {
+        let escaped = gtk4::glib::markup_escape_text("African & Eastern");
+        assert_eq!(escaped.as_str(), "African &amp; Eastern");
+    }
 }
