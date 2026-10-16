@@ -358,6 +358,9 @@ fn write_lines(
     report: &mut ImportReport,
 ) -> Result<()> {
     for line in lines {
+        if crate::model::junk_product_name(&line.name) {
+            continue;
+        }
         if !dry_run {
             dest.execute(
                 "INSERT INTO invoice_lines (invoice_id, name, name_key, qty, unit, unit_price, line_total, product_key) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",

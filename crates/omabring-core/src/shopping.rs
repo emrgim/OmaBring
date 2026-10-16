@@ -6,10 +6,10 @@ use rusqlite::{params, OptionalExtension};
 use crate::crypto::{open, seal};
 use crate::error::{Error, Result};
 use crate::model::{
-    normalize_name, round_money, BackendErrorKind, Cart, CartLine, CheckoutRecord, Comparison,
-    ForecastItem, ForecastStatus, GroupSpend, InvoiceLine, InvoiceSummary, LiveState, MoneyTotal,
-    Offer, OfferSource, PriceGroup, SpendRange, SpendReport, StoreBackend, StoreId, StoreLink,
-    StoreNote, StoreSecrets,
+    junk_product_name, normalize_name, round_money, BackendErrorKind, Cart, CartLine,
+    CheckoutRecord, Comparison, ForecastItem, ForecastStatus, GroupSpend, InvoiceLine,
+    InvoiceSummary, LiveState, MoneyTotal, Offer, OfferSource, PriceGroup, SpendRange, SpendReport,
+    StoreBackend, StoreId, StoreLink, StoreNote, StoreSecrets,
 };
 use crate::{now_rfc3339, App};
 
@@ -259,6 +259,9 @@ impl App {
             let date = NaiveDate::parse_from_str(&invoice.purchased_on, "%Y-%m-%d")
                 .map_err(|_| Error::InvalidInvoice(invoice.purchased_on.clone()))?;
             for line in invoice.lines {
+                if junk_product_name(&line.name) {
+                    continue;
+                }
                 let key = format!(
                     "{}|{}|{}",
                     invoice.store.as_str(),
@@ -596,7 +599,7 @@ impl App {
         for invoice in invoices {
             let currency = invoice.currency.clone();
             for line in invoice.lines {
-                if !normalize_name(&line.name).contains(&needle) {
+                if junk_product_name(&line.name) || !normalize_name(&line.name).contains(&needle) {
                     continue;
                 }
                 let key = format!(
@@ -642,7 +645,12 @@ impl App {
                 |row| row.get::<_, i64>(0),
             )?;
             conn.execute("DELETE FROM invoice_lines WHERE invoice_id = ?1", params![id])?;
-            for line in &draft.lines {
+            let lines: Vec<InvoiceLine> = draft
+                .lines
+                .into_iter()
+                .filter(|line| !junk_product_name(&line.name))
+                .collect();
+            for line in &lines {
                 conn.execute(
                     "INSERT INTO invoice_lines (invoice_id, name, name_key, qty, unit, unit_price, line_total, product_key) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                     params![id, line.name, normalize_name(&line.name), line.qty, line.unit, line.unit_price, line.line_total, line.product_key],
@@ -655,7 +663,7 @@ impl App {
                 purchased_on: draft.purchased_on,
                 currency: draft.currency,
                 total: draft.total,
-                lines: draft.lines,
+                lines,
             })
         })
     }

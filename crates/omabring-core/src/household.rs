@@ -9,7 +9,7 @@ use chrono::{NaiveDate, Utc};
 use rusqlite::{params, OptionalExtension};
 
 use crate::error::{Error, Result};
-use crate::model::{normalize_name, round_money, StoreId};
+use crate::model::{junk_product_name, normalize_name, round_money, StoreId};
 use crate::{now_rfc3339, App};
 
 #[derive(Debug, Clone)]
@@ -399,6 +399,28 @@ pub(crate) fn ensure_household(conn: &rusqlite::Connection) -> Result<()> {
             [],
         )?;
     }
+    purge_junk_lines(conn)?;
+    Ok(())
+}
+
+fn purge_junk_lines(conn: &rusqlite::Connection) -> Result<()> {
+    let ids = {
+        let mut stmt = conn.prepare("SELECT id, name FROM invoice_lines")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut ids = Vec::new();
+        for row in rows {
+            let (id, name) = row?;
+            if junk_product_name(&name) {
+                ids.push(id);
+            }
+        }
+        ids
+    };
+    for id in ids {
+        conn.execute("DELETE FROM invoice_lines WHERE id = ?1", params![id])?;
+    }
     Ok(())
 }
 
@@ -600,7 +622,7 @@ fn image_file(app: &App, key: &str) -> Option<PathBuf> {
     let relative: String = app
         .with_conn(|conn| {
             conn.query_row(
-                "SELECT path FROM product_images WHERE name_key = ?1",
+                "SELECT path FROM product_images WHERE name_key = ?1 COLLATE NOCASE",
                 params![key],
                 |row| row.get(0),
             )
@@ -614,23 +636,209 @@ fn image_file(app: &App, key: &str) -> Option<PathBuf> {
 }
 
 fn image_lookup_keys(app: &App, name: &str) -> Vec<String> {
-    let mut keys = vec![canonical_key(app, name), normalize_name(name)];
+    let mut keys = Vec::new();
+    let mut push = |key: &str| {
+        let key = key.trim();
+        if key.is_empty() || keys.iter().any(|have| have == key) {
+            return;
+        }
+        keys.push(key.to_string());
+    };
+    push(&canonical_key(app, name));
     let wanted = normalize_name(name);
+    let slug = bringfast_name_key(name);
+    push(&wanted);
+    push(&slug);
+    let query_tokens = image_tokens(name);
     let _ = app.with_conn(|conn| {
-        let mut stmt = conn.prepare(
-            "SELECT DISTINCT product_key FROM invoice_lines
-             WHERE product_key != '' AND (name_key = ?1 OR lower(name) = lower(?2))",
-        )?;
-        let rows = stmt.query_map(params![wanted, name], |row| row.get::<_, String>(0))?;
-        for row in rows {
-            keys.push(row?);
+        let mut related: Vec<(String, String, String)> = Vec::new();
+        {
+            let mut stmt = conn.prepare(
+                "SELECT name, ifnull(product_key, ''), name_key FROM invoice_lines
+                 WHERE name_key = ?1 OR lower(name) = lower(?2) OR product_key = ?1 OR product_key = ?3",
+            )?;
+            let rows = stmt.query_map(params![wanted, name, slug], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?;
+            for row in rows {
+                related.push(row?);
+            }
+        }
+        let product_keys: Vec<String> = related
+            .iter()
+            .map(|(_, product_key, _)| product_key.clone())
+            .filter(|key| !key.trim().is_empty())
+            .collect();
+        for product_key in &product_keys {
+            let mut stmt = conn.prepare(
+                "SELECT name, ifnull(product_key, ''), name_key FROM invoice_lines
+                 WHERE product_key = ?1",
+            )?;
+            let rows = stmt.query_map(params![product_key], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?;
+            for row in rows {
+                let found = row?;
+                if !related.iter().any(|have| have.0 == found.0 && have.1 == found.1) {
+                    related.push(found);
+                }
+            }
+        }
+        if !product_keys.is_empty() {
+            let mut stmt = conn.prepare(
+                "SELECT name, product_key, product_key FROM products WHERE product_key = ?1",
+            )?;
+            for product_key in &product_keys {
+                let rows = stmt.query_map(params![product_key], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                })?;
+                for row in rows {
+                    related.push(row?);
+                }
+            }
+        }
+        for (line_name, product_key, name_key) in &related {
+            push(line_name);
+            push(&normalize_name(line_name));
+            push(&bringfast_name_key(line_name));
+            push(product_key);
+            push(name_key);
+        }
+        let mut stored_keys = Vec::new();
+        {
+            let mut stmt = conn.prepare("SELECT name_key FROM product_images")?;
+            let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+            for row in rows {
+                stored_keys.push(row?);
+            }
+        }
+        let mut best: Option<(usize, String)> = None;
+        for stored in stored_keys {
+            if stored.eq_ignore_ascii_case(&wanted) || stored.eq_ignore_ascii_case(&slug) {
+                push(&stored);
+                continue;
+            }
+            let stored_tokens = image_tokens(&stored);
+            if !image_tokens_match(&query_tokens, &stored_tokens) {
+                continue;
+            }
+            let distance = stored_tokens.len().abs_diff(query_tokens.len());
+            let closer = best
+                .as_ref()
+                .is_none_or(|(have, _)| distance < *have);
+            if closer {
+                best = Some((distance, stored));
+            }
+        }
+        if let Some((_, stored)) = best {
+            push(&stored);
         }
         Ok(())
     });
-    keys.retain(|key| !key.trim().is_empty());
-    keys.sort();
-    keys.dedup();
     keys
+}
+
+fn image_tokens(key: &str) -> Vec<String> {
+    let mut raw = key.trim();
+    if let Some(rest) = raw.strip_prefix("name:") {
+        raw = rest;
+    } else if let Some(rest) = raw.strip_prefix("ean:") {
+        raw = rest;
+    }
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    for c in raw.chars() {
+        if c.is_ascii_alphanumeric() {
+            current.push(c.to_ascii_lowercase());
+        } else if !current.is_empty() {
+            push_image_token(&mut tokens, &current);
+            current.clear();
+        }
+    }
+    if !current.is_empty() {
+        push_image_token(&mut tokens, &current);
+    }
+    tokens
+}
+
+fn push_image_token(tokens: &mut Vec<String>, token: &str) {
+    if token.len() < 2 || image_size_token(token) {
+        return;
+    }
+    tokens.push(token.to_string());
+}
+
+fn image_size_token(token: &str) -> bool {
+    if token.chars().all(|c| c.is_ascii_digit()) {
+        return true;
+    }
+    let letters: String = token.chars().filter(|c| c.is_ascii_alphabetic()).collect();
+    let digits = token.chars().any(|c| c.is_ascii_digit());
+    if digits
+        && matches!(
+            letters.as_str(),
+            "ml" | "l" | "ltr" | "kg" | "g" | "pcs" | "pc" | "cl" | "oz" | "in" | "cm" | "mm"
+        )
+    {
+        return true;
+    }
+    matches!(
+        token,
+        "ml" | "ltr"
+            | "litre"
+            | "liter"
+            | "kg"
+            | "pcs"
+            | "pc"
+            | "pet"
+            | "bottle"
+            | "pack"
+            | "size"
+            | "small"
+            | "medium"
+            | "large"
+            | "xl"
+            | "xxl"
+    )
+}
+
+/// A one-word query must not swallow a longer product ("milk" ≠ "chocolate milk").
+fn image_tokens_match(query: &[String], stored: &[String]) -> bool {
+    if query.is_empty() || stored.is_empty() {
+        return false;
+    }
+    if query.len() < 2 && stored.len() < 2 {
+        return query == stored;
+    }
+    if query.len() >= 2 && tokens_in_order(stored, query) {
+        return true;
+    }
+    stored.len() >= 2 && tokens_in_order(query, stored)
+}
+
+fn tokens_in_order(hay: &[String], needle: &[String]) -> bool {
+    let mut index = 0;
+    for token in hay {
+        if token == &needle[index] {
+            index += 1;
+            if index == needle.len() {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 pub fn product_image_dirs(source: Option<&Path>, receipts: Option<&Path>) -> Vec<PathBuf> {
@@ -801,5 +1009,79 @@ mod tests {
             bringfast_name_key("Coca Cola Zero 330ML"),
             "name:coca-cola-zero-330ml"
         );
+    }
+
+    #[test]
+    fn junk_lines_are_removed_and_a_short_name_finds_its_image() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = App::open(dir.path()).unwrap();
+        app.with_conn(|conn| {
+            conn.execute(
+                "INSERT INTO invoices (store, invoice_no, purchased_on, currency, total) VALUES ('grandiose', 'G-1', '2026-10-01', 'AED', 40)",
+                [],
+            )?;
+            let id: i64 = conn.query_row(
+                "SELECT id FROM invoices WHERE invoice_no = 'G-1'",
+                [],
+                |row| row.get(0),
+            )?;
+            for name in ["Grandiose", "Large (13\")", "Tuna Steak"] {
+                conn.execute(
+                    "INSERT INTO invoice_lines (invoice_id, name, name_key, qty, unit, unit_price, line_total, product_key) VALUES (?1, ?2, ?3, 1, 'piece', 10, 10, ?3)",
+                    params![id, name, normalize_name(name)],
+                )?;
+            }
+            Ok(())
+        })
+        .unwrap();
+        let app = App::open(dir.path()).unwrap();
+        let names: Vec<String> = app
+            .list_invoices()
+            .unwrap()
+            .into_iter()
+            .flat_map(|invoice| invoice.lines.into_iter().map(|line| line.name))
+            .collect();
+        assert_eq!(names, vec!["Tuna Steak".to_string()]);
+
+        let png = include_bytes!("../../../assets/demo/milk.png");
+        let images = app.data_dir().join("product-images");
+        fs::create_dir_all(&images).unwrap();
+        fs::write(images.join("oasis.png"), png).unwrap();
+        fs::write(images.join("soleil.png"), png).unwrap();
+        app.with_conn(|conn| {
+            conn.execute(
+                "INSERT INTO product_images (name_key, path, source_url) VALUES ('name:oasis-blu-sparkling', 'oasis.png', '')",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO product_images (name_key, path, source_url) VALUES ('name:p-soleil', 'soleil.png', '')",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO invoices (store, invoice_no, purchased_on, currency, total) VALUES ('carrefour', 'O-1', '2026-10-02', 'AED', 5)",
+                [],
+            )?;
+            let id: i64 = conn.query_row(
+                "SELECT id FROM invoices WHERE invoice_no = 'O-1'",
+                [],
+                |row| row.get(0),
+            )?;
+            conn.execute(
+                "INSERT INTO invoice_lines (invoice_id, name, name_key, qty, unit, unit_price, line_total, product_key) VALUES (?1, 'Oasis Blu', 'oasis blu', 1, 'piece', 5, 5, 'name:oasis-blu-sparkling')",
+                params![id],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        assert!(app.product_image("Oasis Blu").unwrap().is_file());
+        assert!(app.product_image("P.SOLEIL").unwrap().is_file());
+        app.store_product_image("Rana Pesto Alla Genovese", png)
+            .unwrap();
+        assert!(app.product_image("RANA PESTO").unwrap().is_file());
+        app.store_product_image("Al Jazira Eggs 30pcs", png)
+            .unwrap();
+        assert!(app.product_image("AL JAZIRA EGGS").unwrap().is_file());
+        app.store_product_image("Chocolate Milk", png).unwrap();
+        assert!(app.product_image("Milk").is_none());
     }
 }

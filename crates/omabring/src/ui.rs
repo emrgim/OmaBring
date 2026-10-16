@@ -13,7 +13,8 @@ use gtk4 as gtk;
 use libadwaita as adw;
 use libadwaita::prelude::*;
 use omabring_core::{
-    home_dir, load_window_theme, theme_watch_paths, App, CartLine, InvoiceSummary, Offer, StoreId,
+    home_dir, junk_product_name, load_window_theme, theme_watch_paths, App, CartLine,
+    InvoiceSummary, Offer, StoreId,
 };
 use omabring_stores::Registry;
 
@@ -765,14 +766,37 @@ fn search_page(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
 fn forecast_page(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
     let page = gtk::Box::new(gtk::Orientation::Vertical, 4);
     page.append(&heading_mark("", "FORECAST"));
+    let today = chrono::Utc::now().date_naive();
+    let items = shell.borrow().core.forecast(today).unwrap_or_default();
+    let card = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    card.add_css_class("bf-card");
+    card.add_css_class("bf-dash");
     let lead = gtk::Label::new(Some(
         "What to buy again, from receipts already on this machine.",
     ));
     lead.add_css_class("bf-muted");
+    lead.set_xalign(0.0);
     wrap_label(&lead);
-    page.append(&lead);
-    let today = chrono::Utc::now().date_naive();
-    let items = shell.borrow().core.forecast(today).unwrap_or_default();
+    card.append(&lead);
+    let overdue = items.iter().filter(|item| item.days_until < 0).count();
+    let kpis = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    kpis.set_hexpand(true);
+    kpis.append(&kpi(&items.len().to_string(), "PRODUCTS"));
+    kpis.append(&kpi(&overdue.to_string(), "OVERDUE"));
+    card.append(&kpis);
+    if items.is_empty() {
+        let empty = gtk::Label::new(Some("Nothing is due from recent receipts."));
+        empty.add_css_class("bf-muted");
+        empty.set_xalign(0.0);
+        card.append(&empty);
+    } else {
+        let buckets: Vec<(String, f64)> = items
+            .iter()
+            .map(|item| (axis_name(&item.name), item.likely as f64))
+            .collect();
+        card.append(&bars(&buckets));
+    }
+    page.append(&card);
     let products: Vec<Prod> = items
         .into_iter()
         .map(|item| {
@@ -844,7 +868,8 @@ fn board(shell: &Rc<RefCell<Shell>>, purchases: bool) -> gtk::Box {
         dash.add_css_class("is-focus");
     }
     if purchases {
-        let kpis = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        let kpis = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        kpis.set_hexpand(true);
         kpis.append(&kpi(&format!("AED {:.0}", view.total), "SPENT"));
         kpis.append(&kpi(
             &view.buckets.len().to_string(),
@@ -971,92 +996,132 @@ fn date_row(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
     row
 }
 
-const BAR_PX: f64 = 52.0;
+struct BarLayout {
+    width: i32,
+    height: f64,
+    centre: bool,
+    stride: usize,
+}
 
-fn bars(buckets: &[(String, f64)]) -> gtk::Widget {
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 2);
-    row.set_halign(gtk::Align::Start);
-    row.set_size_request(-1, BAR_PX as i32 + 14);
-    let max = buckets.iter().fold(0.0_f64, |acc, (_, n)| acc.max(*n));
-    let wide = buckets.len() <= 16;
-    let bar_width = if wide { 12 } else { 6 };
-    for (index, (label, amount)) in buckets.iter().enumerate() {
-        let track = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        track.add_css_class("bf-bar");
-        track.set_hexpand(false);
-        track.set_size_request(bar_width, BAR_PX as i32);
-        if index + 1 == buckets.len() {
-            track.add_css_class("on");
-        }
-        let spacer = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        spacer.set_vexpand(true);
-        let fill = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        fill.add_css_class("bf-bar-fill");
-        fill.set_hexpand(true);
-        let height = if max <= 0.0 {
-            0
-        } else {
-            ((*amount / max) * BAR_PX).round().clamp(0.0, BAR_PX) as i32
-        };
-        if height > 0 {
-            fill.set_height_request(height.max(2));
-        }
-        track.append(&spacer);
-        track.append(&fill);
-        track.set_tooltip_text(Some(&format!("{label} · AED {amount:.2}")));
-        let col = gtk::Box::new(gtk::Orientation::Vertical, 2);
-        col.set_hexpand(false);
-        col.append(&track);
-        if wide {
-            let caption = gtk::Label::new(Some(label));
-            caption.add_css_class("bf-muted");
-            caption.set_xalign(0.5);
-            col.append(&caption);
-        }
-        row.append(&col);
+fn bar_layout(count: usize) -> BarLayout {
+    let (width, height, centre) = if count <= 3 {
+        (72, 96.0, true)
+    } else if count <= 8 {
+        (48, 80.0, true)
+    } else if count <= 16 {
+        (28, 64.0, false)
+    } else {
+        (16, 52.0, false)
+    };
+    let pitch = (width + 2) as f64;
+    let stride = (46.0 / pitch).ceil() as usize;
+    BarLayout {
+        width,
+        height,
+        centre,
+        stride: stride.max(1),
     }
+}
+
+fn axis_name(name: &str) -> String {
+    let mut chars = name.chars();
+    let short: String = chars.by_ref().take(18).collect();
+    if chars.next().is_some() {
+        format!("{short}…")
+    } else {
+        short
+    }
+}
+
+fn attach_axis(grid: &gtk::Grid, column: i32, span: i32, text: &str) {
+    let caption = gtk::Label::new(Some(text));
+    caption.add_css_class("bf-muted");
+    caption.set_xalign(0.5);
+    caption.set_max_width_chars(10);
+    caption.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    caption.set_hexpand(true);
+    grid.attach(&caption, column, 1, span, 1);
+}
+
+fn bar_scroller(grid: &gtk::Grid, layout: &BarLayout) -> gtk::Widget {
+    grid.set_halign(if layout.centre {
+        gtk::Align::Center
+    } else {
+        gtk::Align::Start
+    });
+    grid.set_hexpand(false);
+    grid.set_column_spacing(2);
+    grid.set_row_spacing(2);
     let scroll = gtk::ScrolledWindow::builder()
-        .child(&row)
+        .child(grid)
         .hscrollbar_policy(gtk::PolicyType::Automatic)
         .vscrollbar_policy(gtk::PolicyType::Never)
-        .min_content_height(BAR_PX as i32 + 16)
+        .min_content_height(layout.height as i32 + 20)
         .propagate_natural_height(true)
+        .hexpand(true)
         .build();
     scroll.upcast()
 }
 
+fn bar_fill(amount: f64, max: f64, layout: &BarLayout) -> gtk::Box {
+    let track = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    track.set_size_request(layout.width, layout.height as i32);
+    let spacer = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    spacer.set_vexpand(true);
+    let fill = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    fill.add_css_class("bf-bar-fill");
+    fill.set_hexpand(true);
+    let height = if max <= 0.0 {
+        0
+    } else {
+        ((amount / max) * layout.height)
+            .round()
+            .clamp(0.0, layout.height) as i32
+    };
+    if height > 0 {
+        fill.set_height_request(height.max(8).min(layout.height as i32));
+    }
+    track.append(&spacer);
+    track.append(&fill);
+    track
+}
+
+fn bars(buckets: &[(String, f64)]) -> gtk::Widget {
+    let layout = bar_layout(buckets.len());
+    let grid = gtk::Grid::new();
+    let max = buckets.iter().fold(0.0_f64, |acc, (_, n)| acc.max(*n));
+    let count = buckets.len();
+    for (index, (label, amount)) in buckets.iter().enumerate() {
+        let track = bar_fill(*amount, max, &layout);
+        track.add_css_class("bf-bar");
+        if index + 1 == count {
+            track.add_css_class("on");
+        }
+        track.set_tooltip_text(Some(&format!("{label} · {amount:.2}")));
+        grid.attach(&track, index as i32, 0, 1, 1);
+    }
+    let mut column = 0i32;
+    while (column as usize) < count {
+        let span = layout.stride.min(count - column as usize) as i32;
+        attach_axis(&grid, column, span, &buckets[column as usize].0);
+        column += span;
+    }
+    bar_scroller(&grid, &layout)
+}
+
 fn spend_bars(shell: &Rc<RefCell<Shell>>, buckets: &[SpendBucket]) -> gtk::Widget {
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 2);
-    row.set_halign(gtk::Align::Start);
-    row.set_size_request(-1, BAR_PX as i32 + 14);
+    let layout = bar_layout(buckets.len());
+    let grid = gtk::Grid::new();
     let max = buckets
         .iter()
         .fold(0.0_f64, |acc, bucket| acc.max(bucket.amount));
-    let wide = buckets.len() <= 16;
-    let bar_width = if wide { 12 } else { 6 };
     let focus = shell.borrow().bar_focus.clone();
-    for bucket in buckets {
-        let track = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        track.set_size_request(bar_width, BAR_PX as i32);
-        let spacer = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        spacer.set_vexpand(true);
-        let fill = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        fill.add_css_class("bf-bar-fill");
-        fill.set_hexpand(true);
-        let height = if max <= 0.0 {
-            0
-        } else {
-            ((bucket.amount / max) * BAR_PX).round().clamp(0.0, BAR_PX) as i32
-        };
-        if height > 0 {
-            fill.set_height_request(height.max(2));
-        }
-        track.append(&spacer);
-        track.append(&fill);
+    for (index, bucket) in buckets.iter().enumerate() {
+        let track = bar_fill(bucket.amount, max, &layout);
         let button = gtk::Button::new();
         button.set_child(Some(&track));
         button.add_css_class("bf-bar");
-        button.set_size_request(bar_width, BAR_PX as i32);
+        button.set_size_request(layout.width, layout.height as i32);
         if focus.as_deref() == Some(bucket.key.as_str()) {
             button.add_css_class("focus");
         }
@@ -1083,25 +1148,16 @@ fn spend_bars(shell: &Rc<RefCell<Shell>>, buckets: &[SpendBucket]) -> gtk::Widge
             drop(state);
             schedule(&shell_click);
         });
-        let col = gtk::Box::new(gtk::Orientation::Vertical, 2);
-        col.set_hexpand(false);
-        col.append(&button);
-        if wide {
-            let caption = gtk::Label::new(Some(&bucket.label));
-            caption.add_css_class("bf-muted");
-            caption.set_xalign(0.5);
-            col.append(&caption);
-        }
-        row.append(&col);
+        grid.attach(&button, index as i32, 0, 1, 1);
     }
-    let scroll = gtk::ScrolledWindow::builder()
-        .child(&row)
-        .hscrollbar_policy(gtk::PolicyType::Automatic)
-        .vscrollbar_policy(gtk::PolicyType::Never)
-        .min_content_height(BAR_PX as i32 + 16)
-        .propagate_natural_height(true)
-        .build();
-    scroll.upcast()
+    let count = buckets.len();
+    let mut column = 0i32;
+    while (column as usize) < count {
+        let span = layout.stride.min(count - column as usize) as i32;
+        attach_axis(&grid, column, span, &buckets[column as usize].label);
+        column += span;
+    }
+    bar_scroller(&grid, &layout)
 }
 
 fn trend_card(products: &[Prod]) -> gtk::Box {
@@ -1691,25 +1747,35 @@ fn product_page(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
     hero.append(&heading(&title));
     page.append(&hero);
 
-    let stats = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+    let stats = gtk::FlowBox::new();
+    stats.add_css_class("bf-stats");
+    stats.set_selection_mode(gtk::SelectionMode::None);
+    stats.set_column_spacing(8);
+    stats.set_row_spacing(4);
+    stats.set_min_children_per_line(2);
+    stats.set_max_children_per_line(4);
+    stats.set_homogeneous(true);
+    stats.set_hexpand(true);
     if let Some(item) = &history {
-        stats.append(&kpi(&item.times.to_string(), "TIMES"));
-        stats.append(&kpi(&format!("AED {:.2}", item.spent), "SPENT"));
-        stats.append(&kpi(&format!("AED {:.2}", item.avg), "AVG"));
-        stats.append(&kpi(&format!("AED {:.2}", item.min), "MIN"));
-        stats.append(&kpi(&format!("AED {:.2}", item.max), "MAX"));
-        stats.append(&kpi(
-            if item.last.is_empty() {
-                "—"
-            } else {
-                &item.last
-            },
-            "LAST",
-        ));
-        stats.append(&kpi(&item.frequency, "FREQUENCY"));
-        stats.append(&likely_kpi(shell, &name, item.likely));
+        let last = if item.last.is_empty() {
+            "—".to_string()
+        } else {
+            item.last.clone()
+        };
         let next = next_label(&item.next);
-        stats.append(&kpi(&next, "NEXT"));
+        for (caption, value) in [
+            ("TIMES", item.times.to_string()),
+            ("SPENT", format!("AED {:.2}", item.spent)),
+            ("AVG", format!("AED {:.2}", item.avg)),
+            ("MIN", format!("AED {:.2}", item.min)),
+            ("MAX", format!("AED {:.2}", item.max)),
+            ("LAST", last),
+            ("FREQUENCY", item.frequency.clone()),
+            ("NEXT", next),
+        ] {
+            stats.insert(&kpi(&value, caption), -1);
+        }
+        stats.insert(&likely_kpi(shell, &name, item.likely), -1);
     }
     page.append(&stats);
     if let Some(item) = &history {
@@ -2029,7 +2095,9 @@ fn product_thumb(shell: &Rc<RefCell<Shell>>, name: &str, size: i32) -> gtk::Widg
     if let Some(path) = shell.borrow().core.product_image(name) {
         let picture = gtk::Picture::for_filename(path);
         picture.set_size_request(size, size);
+        picture.set_can_shrink(false);
         picture.set_content_fit(gtk::ContentFit::Cover);
+        picture.set_overflow(gtk::Overflow::Hidden);
         picture.add_css_class("bf-thumb");
         return picture.upcast();
     }
@@ -2669,15 +2737,7 @@ fn receipt_list(shell: &Rc<RefCell<Shell>>, invoices: &[InvoiceSummary]) -> gtk:
         row.add_controller(click);
         card.append(&row);
     }
-    let scroll = gtk::ScrolledWindow::builder()
-        .child(&card)
-        .propagate_natural_height(true)
-        .max_content_height(132)
-        .hscrollbar_policy(gtk::PolicyType::Never)
-        .build();
-    let wrap = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    wrap.append(&scroll);
-    wrap
+    card
 }
 
 fn next_label(next: &str) -> String {
@@ -2869,6 +2929,9 @@ fn products_from(
             continue;
         };
         for line in &invoice.lines {
+            if junk_product_name(&line.name) {
+                continue;
+            }
             let key = line.name.to_lowercase();
             if !map.contains_key(&key) {
                 order.push(key.clone());
@@ -2989,11 +3052,15 @@ fn heading_mark(before: &str, word: &str) -> gtk::Label {
 
 fn likely_kpi(shell: &Rc<RefCell<Shell>>, name: &str, likely: u8) -> gtk::Box {
     let box_ = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    box_.append(&likely_votes(shell, name, likely));
+    box_.add_css_class("bf-stat");
+    box_.set_hexpand(true);
     let caption = gtk::Label::new(Some("LIKELY"));
     caption.add_css_class("bf-kicker");
     caption.set_xalign(0.0);
+    let votes = likely_votes(shell, name, likely);
+    votes.set_halign(gtk::Align::Start);
     box_.append(&caption);
+    box_.append(&votes);
     box_
 }
 
@@ -3043,14 +3110,19 @@ fn vote_button(shell: &Rc<RefCell<Shell>>, name: &str, delta: i32) -> gtk::Butto
 
 fn kpi(value: &str, caption: &str) -> gtk::Box {
     let box_ = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    let value = gtk::Label::new(Some(value));
-    value.add_css_class("bf-brand");
-    value.set_xalign(0.0);
+    box_.add_css_class("bf-stat");
+    box_.set_hexpand(true);
+    box_.set_size_request(72, -1);
     let caption = gtk::Label::new(Some(caption));
     caption.add_css_class("bf-kicker");
     caption.set_xalign(0.0);
-    box_.append(&value);
+    caption.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    let value = gtk::Label::new(Some(value));
+    value.add_css_class("bf-brand");
+    value.set_xalign(0.0);
+    value.set_ellipsize(gtk::pango::EllipsizeMode::End);
     box_.append(&caption);
+    box_.append(&value);
     box_
 }
 

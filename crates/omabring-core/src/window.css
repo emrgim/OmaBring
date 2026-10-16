@@ -236,6 +236,20 @@ window.omabring .bf-logo-sm {
 
 window.omabring picture.bf-thumb {
   background-color: transparent;
+  min-width: 22px;
+  min-height: 22px;
+}
+
+window.omabring .bf-stat {
+  min-width: 64px;
+  padding: 1px 4px;
+}
+
+window.omabring flowbox.bf-stats,
+window.omabring flowboxchild {
+  background-color: transparent;
+  border: none;
+  padding: 0;
 }
 
 window.omabring .bf-theme {

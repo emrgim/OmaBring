@@ -491,6 +491,108 @@ pub fn normalize_name(name: &str) -> String {
         .to_lowercase()
 }
 
+/// A receipt line that is the store's own name, or only a size ("Large (13")").
+/// Real products such as "Carrefour Chicken" and "Rice 5kg" stay.
+pub fn junk_product_name(name: &str) -> bool {
+    let folded = fold_product_name(name);
+    if folded.is_empty() {
+        return true;
+    }
+    const STORES: &[&str] = &[
+        "grandiose",
+        "carrefour",
+        "union coop",
+        "unioncoop",
+        "waitrose",
+        "spinneys",
+        "mmi",
+        "african eastern",
+        "african and eastern",
+        "careem",
+        "mcdonalds",
+        "mcdonald s",
+        "mc donalds",
+        "amazon",
+        "amazon it",
+        "amazon ae",
+    ];
+    if STORES.contains(&folded.as_str()) {
+        return true;
+    }
+    size_fragment(&folded)
+}
+
+fn fold_product_name(name: &str) -> String {
+    let mut out = String::new();
+    let mut gap = false;
+    for c in name.chars() {
+        if c.is_ascii_alphanumeric() {
+            if gap && !out.is_empty() {
+                out.push(' ');
+            }
+            gap = false;
+            out.push(c.to_ascii_lowercase());
+        } else {
+            gap = true;
+        }
+    }
+    out
+}
+
+fn size_fragment(folded: &str) -> bool {
+    let tokens: Vec<&str> = folded
+        .split_whitespace()
+        .filter(|t| !t.is_empty())
+        .collect();
+    if tokens.is_empty() {
+        return false;
+    }
+    let mut adjective = false;
+    for token in tokens {
+        if size_adjective(token) {
+            adjective = true;
+            continue;
+        }
+        if token.chars().all(|c| c.is_ascii_digit()) || size_unit(token) {
+            continue;
+        }
+        return false;
+    }
+    adjective
+}
+
+fn size_adjective(token: &str) -> bool {
+    matches!(
+        token,
+        "small" | "medium" | "large" | "xl" | "xxl" | "xs" | "regular" | "personal" | "family"
+    )
+}
+
+fn size_unit(token: &str) -> bool {
+    matches!(
+        token,
+        "inch"
+            | "inches"
+            | "in"
+            | "cm"
+            | "mm"
+            | "ml"
+            | "cl"
+            | "l"
+            | "ltr"
+            | "litre"
+            | "liter"
+            | "g"
+            | "kg"
+            | "oz"
+            | "pcs"
+            | "pc"
+            | "pack"
+            | "size"
+            | "pizza"
+    )
+}
+
 pub fn round_money(value: f64) -> f64 {
     (value * 100.0).round() / 100.0
 }
