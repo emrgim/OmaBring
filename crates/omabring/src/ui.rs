@@ -28,6 +28,7 @@ enum Grain {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SortKey {
+    Last,
     Likely,
     Times,
     Qty,
@@ -1051,6 +1052,9 @@ fn product_table(shell: &Rc<RefCell<Shell>>, products: &[Prod], full: bool) -> g
     let name = sort_header(shell, "Product", SortKey::Name, 0, false);
     name.set_hexpand(true);
     head.append(&name);
+    if full {
+        head.append(&sort_header(shell, "Last", SortKey::Last, 96, false));
+    }
     head.append(&sort_header(shell, "Times", SortKey::Times, 64, true));
     if full {
         head.append(&sort_header(shell, "Units", SortKey::Qty, 72, true));
@@ -1084,6 +1088,13 @@ fn product_table(shell: &Rc<RefCell<Shell>>, products: &[Prod], full: bool) -> g
         let name = cell(&product.name, 0, false);
         name.set_hexpand(true);
         row.append(&name);
+        if full {
+            row.append(&cell(
+                &product.last.format("%Y-%m-%d").to_string(),
+                96,
+                false,
+            ));
+        }
         row.append(&cell(&product.times.to_string(), 64, true));
         if full {
             row.append(&cell(&qty_text(product.qty), 72, true));
@@ -1851,17 +1862,14 @@ fn purchase_list(shell: &Rc<RefCell<Shell>>, item: &omabring_core::ProductHistor
     for point in item.points.iter().rev() {
         let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         line.add_css_class("bf-row");
+        let date = cell(&point.date.format("%Y-%m-%d").to_string(), 96, false);
         let when = cell(
-            &format!(
-                "{} · {} · #{}",
-                point.date.format("%Y-%m-%d"),
-                store_label(point.store),
-                point.invoice_no
-            ),
+            &format!("{} · #{}", store_label(point.store), point.invoice_no),
             0,
             false,
         );
         when.set_hexpand(true);
+        line.append(&date);
         line.append(&when);
         line.append(&cell(
             &format!("AED {:.2} · {} u", point.unit_price, qty_text(point.qty)),
@@ -2336,13 +2344,14 @@ fn receipt_page(shell: &Rc<RefCell<Shell>>, id: i64) -> gtk::Box {
     slip.add_css_class("bf-card");
     let title = heading(&store_label(invoice.store).to_uppercase());
     title.add_css_class("bf-h1-sm");
-    let meta = gtk::Label::new(Some(&format!(
-        "{} · #{}",
-        invoice.purchased_on, invoice.invoice_no
-    )));
+    let date = gtk::Label::new(Some(&invoice.purchased_on));
+    date.add_css_class("bf-brand");
+    date.set_xalign(0.0);
+    let meta = gtk::Label::new(Some(&format!("#{}", invoice.invoice_no)));
     meta.add_css_class("bf-muted");
     meta.set_xalign(0.0);
     slip.append(&title);
+    slip.append(&date);
     slip.append(&meta);
 
     let head = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -2620,6 +2629,7 @@ fn products_from(
         .collect();
     products.sort_by(|a, b| {
         let ordering = match sort {
+            SortKey::Last => a.last.cmp(&b.last),
             SortKey::Spent => a
                 .spent
                 .partial_cmp(&b.spent)
@@ -3102,6 +3112,15 @@ mod tests {
         let units = products_from(&refs, &likely, SortKey::Qty, true);
         assert_eq!(units[0].name, "Milk");
         assert!((units[0].qty - 3.0).abs() < 0.01);
+        let latest = products_from(&refs, &likely, SortKey::Last, true);
+        assert_eq!(latest[0].name, "Bread");
+        assert_eq!(latest[0].last.format("%Y-%m-%d").to_string(), "2026-02-02");
+        let earliest = products_from(&refs, &likely, SortKey::Last, false);
+        assert_eq!(earliest[0].name, "Milk");
+        assert_eq!(
+            earliest[0].last.format("%Y-%m-%d").to_string(),
+            "2026-02-01"
+        );
     }
 
     #[test]
