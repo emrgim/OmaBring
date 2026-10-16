@@ -195,10 +195,13 @@ fn search_grandiose(query: &str) -> Result<Vec<Offer>, BackendError> {
         "https://www.grandiose.ae/graphql",
         "",
         r#"query Search($q: String!, $n: Int!) { products(search: $q, pageSize: $n) { items { sku name price_range { minimum_price { regular_price { value currency } } } } } }"#,
-        json!({"q": query, "n": 8}),
+        json!({"q": query, "n": 20}),
         "Grandiose",
     )?;
-    offers_from_magento_products(StoreId::Grandiose, &body)
+    let mut offers = offers_from_magento_products(StoreId::Grandiose, &body)?;
+    rank_offers(query, &mut offers);
+    offers.truncate(8);
+    Ok(offers)
 }
 
 fn search_african(query: &str) -> Result<Vec<Offer>, BackendError> {
@@ -206,10 +209,14 @@ fn search_african(query: &str) -> Result<Vec<Offer>, BackendError> {
         "https://www.africaneasternonline.com/graphql",
         "",
         r#"query ($q: String!, $n: Int!) { products(search: $q, pageSize: $n) { items { sku name price_range { minimum_price { regular_price { value currency } } } } } }"#,
-        json!({"q": query, "n": 8}),
+        json!({"q": query, "n": 20}),
         "African & Eastern",
     )?;
-    offers_from_magento_products(StoreId::AfricanEastern, &body)
+    let mut offers = offers_from_magento_products(StoreId::AfricanEastern, &body)?;
+    offers.retain(|offer| query_matches(query, &offer.name));
+    rank_offers(query, &mut offers);
+    offers.truncate(8);
+    Ok(offers)
 }
 
 pub(crate) fn offers_from_magento_products(
@@ -275,7 +282,11 @@ fn search_mmi(query: &str) -> Result<Vec<Offer>, BackendError> {
             ("client-type", "web"),
         ],
     )?;
-    offers_from_mmi(&body)
+    let mut offers = offers_from_mmi(&body)?;
+    offers.retain(|offer| query_matches(query, &offer.name));
+    rank_offers(query, &mut offers);
+    offers.truncate(8);
+    Ok(offers)
 }
 
 pub(crate) fn offers_from_mmi(body: &str) -> Result<Vec<Offer>, BackendError> {
@@ -419,39 +430,38 @@ pub(crate) fn offers_from_html(
     origin: &str,
     href_prefix: &str,
 ) -> Vec<Offer> {
+    let _ = origin;
+    let mut offers = offers_from_split(store, html, href_prefix, "data-product-id=\"");
+    if offers.is_empty() {
+        offers = offers_from_split(store, html, href_prefix, "js-product-wrapper");
+    }
+    if offers.is_empty() {
+        offers = offers_from_split(store, html, href_prefix, "product-name");
+    }
+    offers
+}
+
+fn offers_from_split(store: StoreId, html: &str, href_prefix: &str, marker: &str) -> Vec<Offer> {
     let mut offers = Vec::new();
     let mut seen = Vec::new();
-    for block in html.split("data-product-id=\"").skip(1) {
+    for block in html.split(marker).skip(1) {
         let product_id = block
             .chars()
             .take_while(|ch| ch.is_ascii_digit())
             .collect::<String>();
-        let Some(href_at) = block.find("href=\"") else {
+        let Some(href) = find_href(block, href_prefix) else {
             continue;
         };
-        let href_rest = &block[href_at + 6..];
-        let Some(end) = href_rest.find('"') else {
-            continue;
-        };
-        let href = &href_rest[..end];
-        if !href.starts_with(href_prefix) || seen.iter().any(|item| item == href) {
+        if seen.iter().any(|item| item == &href) {
             continue;
         }
-        seen.push(href.to_string());
-        let name = html_name(block).unwrap_or_else(|| {
-            href.trim_end_matches('/')
-                .rsplit('/')
-                .next()
-                .unwrap_or(href)
-                .to_string()
-        });
-        let price = html_price(block);
-        let Some(price) = price else {
+        let Some(name) = html_name(block, href_prefix) else {
             continue;
         };
-        if name.trim().is_empty() {
+        let Some(price) = html_price(block) else {
             continue;
-        }
+        };
+        seen.push(href.clone());
         let id = if product_id.is_empty() {
             href.trim_end_matches('/')
                 .rsplit('_')
@@ -466,78 +476,190 @@ pub(crate) fn offers_from_html(
             break;
         }
     }
-    let _ = origin;
     offers
 }
 
-fn html_name(block: &str) -> Option<String> {
-    if let Some(anchor) = text_of_first_anchor(block) {
-        return Some(anchor);
+/// Product title, never the image markup inside the first link.
+///
+/// Waitrose puts `<div class="intrinsic-image">` in the photo link and the
+/// title in a later plain-text link. Spinneys puts the title in
+/// `class="product-name"`, and the photo link is not always the first `href`.
+fn html_name(block: &str, href_prefix: &str) -> Option<String> {
+    if let Some(name) = plain_anchor_near(block, "product-name", href_prefix) {
+        return Some(name);
     }
-    for marker in ["product-name\">", "<h5"] {
-        if let Some(at) = block.find(marker) {
-            if let Some(anchor) = text_of_first_anchor(&block[at..]) {
-                return Some(anchor);
-            }
-        }
+    if let Some(name) = plain_product_anchor(block, href_prefix) {
+        return Some(name);
     }
-    if let Some(at) = block.find("alt=\"") {
-        let rest = &block[at + 5..];
-        if let Some(end) = rest.find('"') {
-            let name = rest[..end].trim();
-            if name.len() >= 2 {
-                return Some(name.to_string());
-            }
-        }
+    if let Some(name) = plain_anchor_near(block, "<h5", href_prefix) {
+        return Some(name);
     }
-    None
-}
-
-fn text_of_first_anchor(block: &str) -> Option<String> {
-    let start = block.find("<a")?;
-    let rest = &block[start..];
-    let open_end = rest.find('>')?;
-    let close = rest.find("</a>")?;
-    if close <= open_end {
-        return None;
+    if let Some(name) = image_alt(block) {
+        return Some(name);
     }
-    let cleaned = rest[open_end + 1..close]
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
-    if cleaned.len() >= 2 {
-        Some(cleaned)
+    let href = find_href(block, href_prefix)?;
+    let slug = href
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or("")
+        .split('_')
+        .next()
+        .unwrap_or("")
+        .replace('-', " ");
+    let slug = slug.split_whitespace().collect::<Vec<_>>().join(" ");
+    if slug.len() >= 2 && !slug.contains('<') {
+        Some(slug)
     } else {
         None
     }
 }
 
-fn html_price(block: &str) -> Option<f64> {
-    if let Some(at) = block.find("AED") {
-        let rest = block[at + 3..].trim_start();
-        let number: String = rest
-            .chars()
-            .skip_while(|ch| !ch.is_ascii_digit())
-            .take_while(|ch| ch.is_ascii_digit() || *ch == '.')
-            .collect();
-        if let Ok(price) = number.parse::<f64>() {
-            return Some(price);
+fn plain_anchor_near(block: &str, marker: &str, href_prefix: &str) -> Option<String> {
+    let at = block.find(marker)?;
+    let window = &block[at..];
+    let window = window.get(..window.len().min(700)).unwrap_or(window);
+    plain_product_anchor(window, href_prefix).or_else(|| plain_product_anchor(window, ""))
+}
+
+fn plain_product_anchor(block: &str, href_prefix: &str) -> Option<String> {
+    let mut rest = block;
+    while let Some(at) = rest.find("href=") {
+        let from = &rest[at..];
+        let Some((href, after_href)) = read_attr(from, "href") else {
+            rest = &rest[at + 5..];
+            continue;
+        };
+        if !href_prefix.is_empty() && !href_matches(&href, href_prefix) {
+            rest = after_href;
+            continue;
         }
+        let Some(gt) = from.find('>') else {
+            break;
+        };
+        let inner_from = &from[gt + 1..];
+        let Some(close) = inner_from.find("</a>") else {
+            rest = &rest[at + 5..];
+            continue;
+        };
+        let inner = &inner_from[..close];
+        if !inner.contains('<') {
+            let text = inner.split_whitespace().collect::<Vec<_>>().join(" ");
+            if (2..=200).contains(&text.len()) && text != "#" && !text.contains('<') {
+                return Some(text);
+            }
+        }
+        rest = &rest[at + 5..];
     }
-    if let Some(at) = block.find("class=\"price\"") {
-        let rest = &block[at..];
-        if let Some(start) = rest.find('>') {
-            let number: String = rest[start + 1..]
-                .chars()
-                .skip_while(|ch| ch.is_whitespace())
-                .take_while(|ch| ch.is_ascii_digit() || *ch == '.')
-                .collect();
-            if let Ok(price) = number.parse::<f64>() {
+    None
+}
+
+fn image_alt(block: &str) -> Option<String> {
+    let mut rest = block;
+    while let Some(at) = rest.find("<img") {
+        let tag = &rest[at..];
+        let end = tag.find('>').unwrap_or(tag.len());
+        if let Some((alt, _)) = read_attr(&tag[..end], "alt") {
+            let alt = alt.trim();
+            let junk = alt.is_empty()
+                || alt == "#"
+                || alt.eq_ignore_ascii_case("add")
+                || alt.eq_ignore_ascii_case("remove")
+                || alt.eq_ignore_ascii_case("cart")
+                || alt.contains('<');
+            if !junk && alt.len() >= 2 {
+                return Some(alt.to_string());
+            }
+        }
+        rest = &rest[at + 4..];
+    }
+    None
+}
+
+fn find_href(block: &str, prefix: &str) -> Option<String> {
+    let mut rest = block;
+    while let Some(at) = rest.find("href=") {
+        let Some((href, next)) = read_attr(&rest[at..], "href") else {
+            rest = &rest[at + 5..];
+            continue;
+        };
+        if href_matches(&href, prefix) {
+            return Some(href);
+        }
+        rest = next;
+    }
+    None
+}
+
+fn href_matches(href: &str, prefix: &str) -> bool {
+    if prefix.is_empty() {
+        return true;
+    }
+    href.starts_with(prefix) || href.contains(prefix)
+}
+
+fn read_attr<'a>(from: &'a str, name: &str) -> Option<(String, &'a str)> {
+    let key = format!("{name}=");
+    if !from.starts_with(&key) {
+        return None;
+    }
+    let after = &from[key.len()..];
+    let quote = after.chars().next()?;
+    if quote != '"' && quote != '\'' {
+        return None;
+    }
+    let body = &after[1..];
+    let end = body.find(quote)?;
+    Some((body[..end].to_string(), &body[end + 1..]))
+}
+
+fn html_price(block: &str) -> Option<f64> {
+    if let Some(price) = number_after_class(block, "price") {
+        return Some(price);
+    }
+    if let Some(at) = block.find("AED") {
+        return first_number(&block[at + 3..]);
+    }
+    None
+}
+
+fn number_after_class(block: &str, class_name: &str) -> Option<f64> {
+    let mut rest = block;
+    while let Some(at) = rest.find("class=") {
+        let Some((class, _)) = read_attr(&rest[at..], "class") else {
+            rest = &rest[at + 6..];
+            continue;
+        };
+        let hit = class.split_whitespace().any(|token| token == class_name);
+        if hit {
+            let from = &rest[at..];
+            let gt = from.find('>')?;
+            if let Some(price) = first_number(&from[gt + 1..]) {
                 return Some(price);
             }
         }
+        rest = &rest[at + 6..];
     }
     None
+}
+
+fn first_number(text: &str) -> Option<f64> {
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.peek().copied() {
+        if ch.is_ascii_digit() {
+            break;
+        }
+        chars.next();
+    }
+    let number: String = chars
+        .take_while(|ch| ch.is_ascii_digit() || *ch == '.')
+        .collect();
+    let price = number.parse::<f64>().ok()?;
+    if price > 0.0 {
+        Some(price)
+    } else {
+        None
+    }
 }
 
 struct Session {
@@ -887,15 +1009,200 @@ fn live_offer(
     price: f64,
     currency: &str,
 ) -> Offer {
+    let unit = pack_unit(&name);
     Offer {
         store,
         product_id,
         name,
         price,
         currency: currency.to_uppercase(),
-        unit: "piece".into(),
+        unit,
         source: OfferSource::Live,
     }
+}
+
+/// Token overlap used by Bring Fast `_score_name`. A token has to be longer
+/// than two characters, so "Baileys" does not match "milk".
+pub(crate) fn query_matches(query: &str, name: &str) -> bool {
+    let query_tokens = significant_tokens(query);
+    let name_tokens = significant_tokens(name);
+    if query_tokens.is_empty() {
+        let needle = query.trim().to_ascii_lowercase();
+        return !needle.is_empty() && name.to_ascii_lowercase().contains(&needle);
+    }
+    query_tokens
+        .iter()
+        .any(|token| name_tokens.iter().any(|word| word == token))
+}
+
+pub(crate) fn rank_offers(query: &str, offers: &mut [Offer]) {
+    let scores: Vec<f64> = offers
+        .iter()
+        .map(|offer| relevance(query, &offer.name))
+        .collect();
+    let mut order: Vec<usize> = (0..offers.len()).collect();
+    order.sort_by(|&a, &b| {
+        scores[b]
+            .partial_cmp(&scores[a])
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.cmp(&b))
+    });
+    let ranked: Vec<Offer> = order
+        .into_iter()
+        .map(|index| offers[index].clone())
+        .collect();
+    offers.clone_from_slice(&ranked);
+}
+
+fn relevance(query: &str, name: &str) -> f64 {
+    let query_tokens = significant_tokens(query);
+    let name_tokens = significant_tokens(name);
+    if query_tokens.is_empty() || name_tokens.is_empty() {
+        return 0.0;
+    }
+    let hit = query_tokens
+        .iter()
+        .filter(|token| name_tokens.iter().any(|word| word == *token))
+        .count();
+    if hit == 0 {
+        return 0.0;
+    }
+    let mut score = hit as f64 / query_tokens.len() as f64;
+    if hit == query_tokens.len() {
+        score += 0.5;
+    }
+    if let Some(head) = head_noun(&name_tokens) {
+        if query_tokens.iter().any(|token| token == &head) {
+            score += 1.2;
+        }
+    }
+    let snacks = [
+        "oreo",
+        "cookie",
+        "cookies",
+        "chocolate",
+        "biscuit",
+        "biscuits",
+        "candy",
+        "wafer",
+        "wafers",
+        "cake",
+        "cakes",
+        "cocoa",
+        "doughnut",
+        "donut",
+    ];
+    let query_is_snack = query_tokens
+        .iter()
+        .any(|token| snacks.contains(&token.as_str()));
+    if !query_is_snack
+        && name_tokens
+            .iter()
+            .any(|token| snacks.contains(&token.as_str()))
+    {
+        score -= 1.0;
+    }
+    if query_tokens.iter().any(|token| token == "milk") {
+        for word in ["fresh", "full", "skimmed", "skim", "lactose", "uht"] {
+            if name_tokens.iter().any(|token| token == word) {
+                score += 0.15;
+            }
+        }
+    }
+    let extra = name_tokens.len().saturating_sub(hit);
+    score -= extra as f64 * 0.05;
+    score
+}
+
+fn head_noun(tokens: &[String]) -> Option<String> {
+    tokens
+        .iter()
+        .rev()
+        .find(|token| !matches!(token.as_str(), "ml" | "kg" | "pack" | "pcs" | "ltr"))
+        .cloned()
+}
+
+fn significant_tokens(value: &str) -> Vec<String> {
+    value
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .map(|token| token.to_ascii_lowercase())
+        .filter(|token| token.len() > 2)
+        .collect()
+}
+
+/// Pack size from the product title: `2 L`, `200 ml`, `1 kg`, `500 g`, or `pack`.
+pub(crate) fn pack_unit(name: &str) -> String {
+    let lower = name.to_ascii_lowercase();
+    let bytes = lower.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index].is_ascii_digit() {
+            let start = index;
+            while index < bytes.len()
+                && (bytes[index].is_ascii_digit() || bytes[index] == b'.' || bytes[index] == b',')
+            {
+                index += 1;
+            }
+            let number = lower[start..index].trim_end_matches('.').replace(',', "");
+            while index < bytes.len() && bytes[index] == b' ' {
+                index += 1;
+            }
+            if let Some((label, consumed, scale)) = unit_suffix(&lower[index..]) {
+                index += consumed;
+                if let Ok(value) = number.parse::<f64>() {
+                    let value = value * scale;
+                    return format_measure(value, label);
+                }
+            }
+        } else {
+            index += 1;
+        }
+    }
+    if lower.contains("pack") {
+        "pack".into()
+    } else {
+        "piece".into()
+    }
+}
+
+fn unit_suffix(text: &str) -> Option<(&'static str, usize, f64)> {
+    const UNITS: &[(&str, &str, f64)] = &[
+        ("millilitre", "ml", 1.0),
+        ("milliliter", "ml", 1.0),
+        ("litres", "L", 1.0),
+        ("liters", "L", 1.0),
+        ("litre", "L", 1.0),
+        ("liter", "L", 1.0),
+        ("ltr", "L", 1.0),
+        ("ml", "ml", 1.0),
+        ("kg", "kg", 1.0),
+        ("cl", "ml", 10.0),
+        ("g", "g", 1.0),
+        ("l", "L", 1.0),
+    ];
+    for (raw, label, scale) in UNITS {
+        if let Some(rest) = text.strip_prefix(raw) {
+            if rest
+                .chars()
+                .next()
+                .is_some_and(|ch| ch.is_ascii_alphabetic())
+            {
+                continue;
+            }
+            return Some((label, raw.len(), *scale));
+        }
+    }
+    None
+}
+
+fn format_measure(value: f64, label: &str) -> String {
+    let number = if (value - value.round()).abs() < 0.001 {
+        format!("{}", value.round() as i64)
+    } else {
+        let text = format!("{value:.2}");
+        text.trim_end_matches('0').trim_end_matches('.').to_string()
+    };
+    format!("{number} {label}")
 }
 
 fn money(value: &Value) -> Option<f64> {
@@ -984,6 +1291,7 @@ mod tests {
         let offers = offers_from_carrefour(body).unwrap();
         assert_eq!(offers[0].name, "Almarai Full Fat Fresh Milk, 2L");
         assert_eq!(offers[0].price, 12.49);
+        assert_eq!(offers[0].unit, "2 L");
         assert_eq!(offers[0].store, StoreId::Carrefour);
         assert_eq!(offers[0].source, OfferSource::Live);
     }
@@ -1017,5 +1325,106 @@ mod tests {
         assert_eq!(offers[0].name, "Fresh Milk");
         assert_eq!(offers[0].price, 8.50);
         assert_eq!(offers[0].product_id, "55");
+        assert_eq!(offers[0].unit, "piece");
+    }
+
+    #[test]
+    fn waitrose_name_skips_the_image_markup() {
+        let html = r##"
+<div data-product-id="1135">
+  <a href="/en/products/almarai-full-fat-milk-2ltr_1135/"><div class="intrinsic-image main"><img alt="#"></div></a>
+  <h5><a href="/en/products/almarai-full-fat-milk-2ltr_1135/">Almarai full fat milk 2ltr</a></h5>
+  <span>AED 15.75</span>
+</div>"##;
+        let offers = offers_from_html(
+            StoreId::Waitrose,
+            html,
+            "https://www.waitrose.ae",
+            "/en/products/",
+        );
+        assert_eq!(offers.len(), 1);
+        assert_eq!(offers[0].name, "Almarai full fat milk 2ltr");
+        assert!(!offers[0].name.contains('<'));
+        assert_eq!(offers[0].price, 15.75);
+        assert_eq!(offers[0].unit, "2 L");
+    }
+
+    #[test]
+    fn spinneys_uses_product_name_not_the_first_link() {
+        let html = r##"
+<div class="js-product-wrapper" data-product-id="335">
+  <a href="/en-ae/account/wishlist/">saved</a>
+  <a href="/en-ae/catalogue/milupa-aptamil-growing-up-toddler-milk-stage-3-200ml_335/">
+    <img alt="#">
+  </a>
+  <span class="price">12.00</span>
+  <p class="product-name">
+    <a href="/en-ae/catalogue/milupa-aptamil-growing-up-toddler-milk-stage-3-200ml_335/">Aptamil Growing Up Milk Formula 1-3 Years 200ml</a>
+  </p>
+</div>"##;
+        let offers = offers_from_html(
+            StoreId::Spinneys,
+            html,
+            "https://www.spinneys.com",
+            "/en-ae/catalogue/",
+        );
+        assert_eq!(offers.len(), 1);
+        assert!(offers[0].name.contains("Aptamil"));
+        assert!(!offers[0].name.contains('<'));
+        assert_eq!(offers[0].price, 12.0);
+        assert_eq!(offers[0].product_id, "335");
+        assert_eq!(offers[0].unit, "200 ml");
+    }
+
+    #[test]
+    fn liquor_catalogues_have_to_match_the_query() {
+        assert!(!query_matches("milk", "Baileys Original"));
+        assert!(!query_matches("milk", "Chivas Regal 12"));
+        assert!(query_matches("milk", "Almarai Full Fat Fresh Milk 2L"));
+        assert!(query_matches("milk", "Oreo Cookies Milk"));
+    }
+
+    #[test]
+    fn fresh_milk_ranks_ahead_of_oreo_and_chocolate() {
+        let mut offers = vec![
+            live_offer(
+                StoreId::Grandiose,
+                "1".into(),
+                "Oreo Cookies Milk".into(),
+                1.65,
+                "AED",
+            ),
+            live_offer(
+                StoreId::Grandiose,
+                "2".into(),
+                "Galaxy Chocolate".into(),
+                8.0,
+                "AED",
+            ),
+            live_offer(
+                StoreId::Grandiose,
+                "3".into(),
+                "Almarai Full Fat Fresh Milk 2L".into(),
+                12.49,
+                "AED",
+            ),
+        ];
+        rank_offers("milk", &mut offers);
+        assert_eq!(offers[0].name, "Almarai Full Fat Fresh Milk 2L");
+        assert_eq!(offers[0].unit, "2 L");
+        offers.retain(|offer| query_matches("milk", &offer.name));
+        assert!(offers
+            .iter()
+            .all(|offer| offer.name.to_lowercase().contains("milk")));
+        assert!(offers[0].name.contains("Fresh Milk"));
+    }
+
+    #[test]
+    fn pack_units_cover_weight_and_packs() {
+        assert_eq!(pack_unit("Rice 5kg"), "5 kg");
+        assert_eq!(pack_unit("Coffee 250g"), "250 g");
+        assert_eq!(pack_unit("Oasis Blu 1L Pack of 6"), "1 L");
+        assert_eq!(pack_unit("Still water pack of 6"), "pack");
+        assert_eq!(pack_unit("White bread"), "piece");
     }
 }

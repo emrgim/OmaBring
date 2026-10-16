@@ -290,7 +290,7 @@ fn build_chrome(
         compare: Vec::new(),
         compare_note: String::new(),
         compare_for: String::new(),
-        search_query: String::new(),
+        search_query: startup_query(),
         search_note: String::new(),
         search_offers: Vec::new(),
         search_started: String::new(),
@@ -1152,12 +1152,7 @@ fn store_card(
     let card = gtk::Box::new(gtk::Orientation::Vertical, 10);
     card.add_css_class("bf-card");
     let head = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-    let logo = gtk::Label::new(Some(store_mark(id)));
-    logo.add_css_class("bf-logo");
-    logo.add_css_class(logo_class(id));
-    logo.set_size_request(64, 64);
-    logo.set_xalign(0.5);
-    logo.set_yalign(0.5);
+    let logo = store_logo(id);
     let text = gtk::Box::new(gtk::Orientation::Vertical, 4);
     text.set_hexpand(true);
     let name_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -1242,12 +1237,7 @@ fn store_page(shell: &Rc<RefCell<Shell>>, id: StoreId) -> gtk::Box {
     let username = link.as_ref().and_then(|link| link.username.clone());
 
     let head = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-    let logo = gtk::Label::new(Some(store_mark(id)));
-    logo.add_css_class("bf-logo");
-    logo.add_css_class(logo_class(id));
-    logo.set_size_request(64, 64);
-    logo.set_xalign(0.5);
-    logo.set_yalign(0.5);
+    let logo = store_logo(id);
     let title = heading(&store_label(id).to_uppercase());
     head.append(&logo);
     head.append(&title);
@@ -2260,6 +2250,43 @@ fn store_chip_label(id: StoreId) -> &'static str {
         StoreId::Spinneys => "Spinneys",
         StoreId::Mmi => "MMI",
         StoreId::AfricanEastern => "African",
+    }
+}
+
+fn startup_query() -> String {
+    std::env::var("OMABRING_QUERY")
+        .unwrap_or_default()
+        .trim()
+        .to_string()
+}
+
+fn store_logo(id: StoreId) -> gtk::Widget {
+    let bytes = gtk::glib::Bytes::from_static(logo_png(id));
+    if let Ok(texture) = gtk::gdk::Texture::from_bytes(&bytes) {
+        let picture = gtk::Picture::for_paintable(&texture);
+        picture.set_size_request(64, 64);
+        picture.set_content_fit(gtk::ContentFit::Contain);
+        picture.add_css_class("bf-logo");
+        return picture.upcast();
+    }
+    let logo = gtk::Label::new(Some(store_mark(id)));
+    logo.add_css_class("bf-logo");
+    logo.add_css_class(logo_class(id));
+    logo.set_size_request(64, 64);
+    logo.set_xalign(0.5);
+    logo.set_yalign(0.5);
+    logo.upcast()
+}
+
+fn logo_png(id: StoreId) -> &'static [u8] {
+    match id {
+        StoreId::Carrefour => include_bytes!("../../../assets/logos/carrefour.png"),
+        StoreId::UnionCoop => include_bytes!("../../../assets/logos/unioncoop.png"),
+        StoreId::Grandiose => include_bytes!("../../../assets/logos/grandiose.png"),
+        StoreId::Waitrose => include_bytes!("../../../assets/logos/waitrose.png"),
+        StoreId::Spinneys => include_bytes!("../../../assets/logos/spinneys.png"),
+        StoreId::Mmi => include_bytes!("../../../assets/logos/mmi.png"),
+        StoreId::AfricanEastern => include_bytes!("../../../assets/logos/africaneastern.png"),
     }
 }
 

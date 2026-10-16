@@ -435,16 +435,8 @@ impl App {
             }
         });
         offers.extend(self.history_offers(query)?);
-        offers.sort_by(|a, b| {
-            a.currency
-                .cmp(&b.currency)
-                .then(
-                    a.price
-                        .partial_cmp(&b.price)
-                        .unwrap_or(std::cmp::Ordering::Equal),
-                )
-                .then(a.store.as_str().cmp(b.store.as_str()))
-        });
+        // Stable by store so each catalog keeps the relevance order it ranked.
+        offers.sort_by(|a, b| a.store.as_str().cmp(b.store.as_str()));
         let groups = group_offers(&offers);
         notes.sort_by_key(|note| note.store.as_str());
         Ok(Comparison {

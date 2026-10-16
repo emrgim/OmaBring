@@ -32,6 +32,46 @@ fn install_icon_fallback() {
     gtk::IconTheme::for_display(&display).add_search_path(&dir);
 }
 
+/// IBM Plex Mono is the grocery face. The Omarchy monospace stays in the CSS
+/// stack for machines where this file cannot be registered.
+fn install_plex_font() {
+    if std::env::var_os("FONTCONFIG_FILE").is_some() {
+        return;
+    }
+    let dir = default_data_dir().join("fonts");
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    let regular = dir.join("IBMPlexMono-Regular.ttf");
+    let bold = dir.join("IBMPlexMono-Bold.ttf");
+    if std::fs::write(
+        &regular,
+        include_bytes!("../../../assets/fonts/IBMPlexMono-Regular.ttf"),
+    )
+    .is_err()
+    {
+        return;
+    }
+    let _ = std::fs::write(
+        &bold,
+        include_bytes!("../../../assets/fonts/IBMPlexMono-Bold.ttf"),
+    );
+    let conf = default_data_dir().join("fonts.conf");
+    let xml = format!(
+        r#"<?xml version="1.0"?>
+<!DOCTYPE fontconfig SYSTEM "fonts.dtd">
+<fontconfig>
+  <include ignore_missing="yes">/etc/fonts/fonts.conf</include>
+  <dir>{}</dir>
+</fontconfig>
+"#,
+        dir.display()
+    );
+    if std::fs::write(&conf, xml).is_ok() {
+        std::env::set_var("FONTCONFIG_FILE", &conf);
+    }
+}
+
 fn fallback_icon_dir() -> PathBuf {
     let preferred = default_data_dir().join("icon-fallback");
     if std::fs::create_dir_all(&preferred).is_ok() {
@@ -51,6 +91,17 @@ fn main() -> glib::ExitCode {
         let palette = load_active_palette(&home_dir());
         println!("{}", palette.to_css());
         return glib::ExitCode::SUCCESS;
+    }
+    if let Some(import) = flag_value(&args, "--import-bringfast") {
+        let path = match import {
+            Ok(path) => path,
+            Err(()) => {
+                eprintln!("omabring --import-bringfast needs a sqlite file or a plain SQL dump");
+                return glib::ExitCode::from(2);
+            }
+        };
+        let dry_run = args.iter().any(|arg| arg == "--dry-run");
+        return import_bringfast(&path, dry_run);
     }
     // These commands print and exit before GTK starts, so an SSH session
     // with no display can smoke-test a local install.
@@ -74,9 +125,19 @@ fn main() -> glib::ExitCode {
         };
         return print_view(&view);
     }
+    if let Some(query) = flag_value(&args, "--gui-search") {
+        match query {
+            Ok(query) => std::env::set_var("OMABRING_QUERY", query),
+            Err(()) => {
+                eprintln!("omabring --gui-search needs a product name");
+                return glib::ExitCode::from(2);
+            }
+        }
+    }
     if std::env::var_os("WAYLAND_DISPLAY").is_some() && std::env::var_os("GDK_BACKEND").is_none() {
         std::env::set_var("GDK_BACKEND", "wayland");
     }
+    install_plex_font();
     let smoke = args.iter().any(|arg| arg == "--smoke");
     let app = adw::Application::builder()
         .application_id("im.mrg.OmaBring")
@@ -156,6 +217,26 @@ fn canonical_view(name: &str) -> Option<&'static str> {
         "forecast" => Some("forecast"),
         "product" => Some("product"),
         _ => None,
+    }
+}
+
+fn import_bringfast(path: &str, dry_run: bool) -> glib::ExitCode {
+    let core = match App::open(default_data_dir()) {
+        Ok(core) => core,
+        Err(err) => {
+            eprintln!("{err}");
+            return glib::ExitCode::from(1);
+        }
+    };
+    match core.import_bringfast(std::path::Path::new(path), dry_run) {
+        Ok(report) => {
+            print!("{report}");
+            glib::ExitCode::SUCCESS
+        }
+        Err(err) => {
+            eprintln!("{err}");
+            glib::ExitCode::from(1)
+        }
     }
 }
 
@@ -247,6 +328,18 @@ mod cli_tests {
         let args = vec!["omabring".into(), "--search".into()];
         assert!(flag_value(&args, "--search").unwrap().is_err());
         assert!(flag_value(&["omabring".into()], "--search").is_none());
+        let args = vec![
+            "omabring".into(),
+            "--gui-search".into(),
+            "milk".into(),
+            "--dry-run".into(),
+        ];
+        assert_eq!(flag_value(&args, "--gui-search").unwrap().unwrap(), "milk");
+        let args = vec!["omabring".into(), "--import-bringfast=bringfast.db".into()];
+        assert_eq!(
+            flag_value(&args, "--import-bringfast").unwrap().unwrap(),
+            "bringfast.db"
+        );
     }
 
     #[test]

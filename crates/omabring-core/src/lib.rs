@@ -1,3 +1,4 @@
+mod bringfast;
 mod crypto;
 mod error;
 mod model;
@@ -12,6 +13,7 @@ use std::sync::Mutex;
 use chrono::{DateTime, SecondsFormat, Utc};
 use rusqlite::{params, Connection};
 
+pub use bringfast::ImportReport;
 pub use crypto::pkce_s256;
 pub use error::{Error, Result};
 pub use model::*;
@@ -214,6 +216,22 @@ CREATE TABLE IF NOT EXISTS oauth_tokens (
     access_expires TEXT NOT NULL,
     refresh_expires TEXT NOT NULL,
     revoked INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS products (
+    product_key TEXT PRIMARY KEY,
+    sku TEXT,
+    name TEXT NOT NULL,
+    category TEXT,
+    image_url TEXT,
+    source TEXT
+);
+
+CREATE TABLE IF NOT EXISTS shopping_list (
+    product_key TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    vote TEXT NOT NULL DEFAULT '',
+    excluded INTEGER NOT NULL DEFAULT 0
 );
 "#;
 

@@ -406,6 +406,10 @@ window.omabring .bf-logo {{
   font-size: 22px;
 }}
 
+window.omabring picture.bf-logo {{
+  background-color: transparent;
+}}
+
 window.omabring .logo-carrefour {{ background-color: #004e9f; color: #ffffff; }}
 window.omabring .logo-union {{ background-color: #0b7a3e; color: #ffffff; }}
 window.omabring .logo-grandiose {{ background-color: #1a1a1a; color: #d4af37; }}
@@ -1167,9 +1171,9 @@ fn css_font_family(name: &str) -> String {
         .collect();
     let cleaned = cleaned.trim();
     if cleaned.is_empty() {
-        "monospace".into()
+        "\"IBM Plex Mono\", monospace".into()
     } else {
-        format!("\"{cleaned}\", monospace")
+        format!("\"IBM Plex Mono\", \"{cleaned}\", monospace")
     }
 }
 
@@ -1219,7 +1223,9 @@ blue = "#89b4fa"
         assert!(css.contains("--omabring-border:"));
         assert!(css.contains("background-color: var(--omabring-bg);"));
         assert!(css.contains("border-radius: 0;"));
-        assert!(css.contains("font-family: \"JetBrainsMono Nerd Font\", monospace;"));
+        assert!(
+            css.contains("font-family: \"IBM Plex Mono\", \"JetBrainsMono Nerd Font\", monospace;")
+        );
         assert!(css.contains("color: var(--omabring-accent);"));
     }
 
