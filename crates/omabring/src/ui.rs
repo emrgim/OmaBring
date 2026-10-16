@@ -405,27 +405,8 @@ fn open_product(shell: &Rc<RefCell<Shell>>, entry: &gtk::Entry) {
 fn purchases(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
     let page = gtk::Box::new(gtk::Orientation::Vertical, 12);
     page.append(&board(shell, true));
-    let sort_row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-    for (key, label) in [
-        (SortKey::Spent, "SPENT"),
-        (SortKey::Frequency, "FREQUENCY"),
-        (SortKey::Likely, "LIKELY"),
-        (SortKey::Times, "TIMES"),
-        (SortKey::Name, "NAME"),
-    ] {
-        let on = shell.borrow().sort == key;
-        let button = chip(label, on);
-        let shell_click = shell.clone();
-        button.connect_clicked(move |_| {
-            shell_click.borrow_mut().sort = key;
-            schedule(&shell_click);
-        });
-        sort_row.append(&button);
-    }
-    page.append(&sort_row);
-
     let stores = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-    let all = chip("ALL", shell.borrow().store_filter.is_none());
+    let all = chip("All", shell.borrow().store_filter.is_none());
     let shell_all = shell.clone();
     all.connect_clicked(move |_| {
         shell_all.borrow_mut().store_filter = None;
@@ -434,7 +415,7 @@ fn purchases(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
     stores.append(&all);
     for id in StoreId::all() {
         let on = shell.borrow().store_filter == Some(id);
-        let button = chip(&store_label(id).to_uppercase(), on);
+        let button = chip(store_chip_label(id), on);
         let shell_click = shell.clone();
         button.connect_clicked(move |_| {
             shell_click.borrow_mut().store_filter = Some(id);
@@ -569,14 +550,14 @@ fn range_row(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
     let custom = shell.borrow().custom;
     let days = shell.borrow().range_days;
     for (len, label) in [
-        (7, "1W"),
-        (14, "2W"),
-        (30, "1M"),
-        (90, "3M"),
-        (365, "1Y"),
-        (730, "2Y"),
-        (1095, "3Y"),
-        (0, "ALL"),
+        (7, "1w"),
+        (14, "2w"),
+        (30, "1m"),
+        (90, "3m"),
+        (365, "1y"),
+        (730, "2y"),
+        (1095, "3y"),
+        (0, "All"),
     ] {
         let on = !custom && days == len;
         let button = chip(label, on);
@@ -622,15 +603,17 @@ fn date_row(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
 }
 
 fn bars(buckets: &[(String, f64)]) -> gtk::Widget {
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 3);
+    row.set_halign(gtk::Align::Start);
     row.set_size_request(-1, 128);
     let max = buckets.iter().fold(0.0_f64, |acc, (_, n)| acc.max(*n));
-    let wide = buckets.len() <= 12;
+    let wide = buckets.len() <= 16;
+    let bar_width = if wide { 22 } else { 9 };
     for (index, (label, amount)) in buckets.iter().enumerate() {
         let track = gtk::Box::new(gtk::Orientation::Vertical, 0);
         track.add_css_class("bf-bar");
-        track.set_hexpand(true);
-        track.set_size_request(if wide { 16 } else { 8 }, 110);
+        track.set_hexpand(false);
+        track.set_size_request(bar_width, 110);
         if index + 1 == buckets.len() {
             track.add_css_class("on");
         }
@@ -651,7 +634,7 @@ fn bars(buckets: &[(String, f64)]) -> gtk::Widget {
         track.append(&fill);
         track.set_tooltip_text(Some(&format!("{label} · AED {amount:.2}")));
         let col = gtk::Box::new(gtk::Orientation::Vertical, 2);
-        col.set_hexpand(true);
+        col.set_hexpand(false);
         col.append(&track);
         if wide {
             let caption = gtk::Label::new(Some(label));
@@ -730,16 +713,22 @@ fn product_table(shell: &Rc<RefCell<Shell>>, products: &[Prod], full: bool) -> g
     let head = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     head.add_css_class("bf-thead");
     head.append(&cell("", 48, false));
-    let name = cell("PRODUCT", 0, false);
-    name.set_hexpand(true);
-    head.append(&name);
-    head.append(&cell("TIMES", 64, true));
     if full {
-        head.append(&cell("UNITS", 72, true));
-        head.append(&cell("FREQUENCY", 120, false));
-        head.append(&cell("LIKELY", 64, true));
+        let name = sort_header(shell, "Product", SortKey::Name, 0);
+        name.set_hexpand(true);
+        head.append(&name);
+        head.append(&sort_header(shell, "Times", SortKey::Times, 64));
+        head.append(&cell("Units", 72, true));
+        head.append(&sort_header(shell, "Frequency", SortKey::Frequency, 120));
+        head.append(&sort_header(shell, "Likely", SortKey::Likely, 64));
+        head.append(&sort_header(shell, "Spent", SortKey::Spent, 110));
+    } else {
+        let name = cell("Product", 0, false);
+        name.set_hexpand(true);
+        head.append(&name);
+        head.append(&cell("Times", 64, true));
+        head.append(&cell("Spent", 110, true));
     }
-    head.append(&cell("SPENT", 110, true));
     card.append(&head);
     if products.is_empty() {
         let empty = gtk::Label::new(Some("No invoices yet."));
@@ -1696,6 +1685,24 @@ fn kpi(value: &str, caption: &str) -> gtk::Box {
     box_
 }
 
+fn sort_header(shell: &Rc<RefCell<Shell>>, text: &str, key: SortKey, width: i32) -> gtk::Button {
+    let button = gtk::Button::with_label(text);
+    button.add_css_class("bf-th");
+    if shell.borrow().sort == key {
+        button.add_css_class("on");
+    }
+    if width > 0 {
+        button.set_width_request(width);
+    }
+    button.set_halign(gtk::Align::Start);
+    let shell_click = shell.clone();
+    button.connect_clicked(move |_| {
+        shell_click.borrow_mut().sort = key;
+        schedule(&shell_click);
+    });
+    button
+}
+
 fn chip(text: &str, on: bool) -> gtk::Button {
     let button = gtk::Button::with_label(text);
     button.add_css_class("bf-chip");
@@ -1800,6 +1807,18 @@ fn store_label(id: StoreId) -> &'static str {
         StoreId::Spinneys => "Spinneys UAE",
         StoreId::Mmi => "MMI",
         StoreId::AfricanEastern => "African + Eastern",
+    }
+}
+
+fn store_chip_label(id: StoreId) -> &'static str {
+    match id {
+        StoreId::Carrefour => "Carrefour",
+        StoreId::UnionCoop => "Union",
+        StoreId::Grandiose => "Grandiose",
+        StoreId::Waitrose => "Waitrose",
+        StoreId::Spinneys => "Spinneys",
+        StoreId::Mmi => "MMI",
+        StoreId::AfricanEastern => "African",
     }
 }
 

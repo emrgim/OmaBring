@@ -406,6 +406,24 @@ window.omabring .bf-thead label {{
   font-weight: 700;
 }}
 
+window.omabring button.bf-th,
+window.omabring button.bf-th label {{
+  background-color: transparent;
+  color: var(--omabring-muted);
+  border: none;
+  padding: 0;
+  font-size: 11px;
+  font-weight: 700;
+  min-height: 0;
+}}
+
+window.omabring button.bf-th.on,
+window.omabring button.bf-th.on label {{
+  background-color: transparent;
+  color: var(--omabring-fg);
+  border: none;
+}}
+
 window.omabring entry,
 window.omabring passwordentry,
 window.omabring searchentry,
