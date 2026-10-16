@@ -60,9 +60,9 @@ impl StoreId {
         }
     }
 
-    /// Remote cart and checkout are part of the store contract for the three
-    /// shops that OmaBring can push a prepared cart to. The others keep a
-    /// local cart. OmaBring does not open an address.
+    /// Grandiose and Union Coop can receive a signed-in cart. Carrefour
+    /// checkout names the store cart page. The others keep a local cart.
+    /// OmaBring does not open an address.
     pub fn remote_checkout(self) -> bool {
         matches!(self, Self::Carrefour | Self::UnionCoop | Self::Grandiose)
     }
@@ -98,6 +98,23 @@ pub struct StoreSecrets {
     pub password: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
+    /// Session token from the store's own sign-in. Catalog search does not need it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_id: Option<String>,
+}
+
+impl StoreSecrets {
+    pub fn blank() -> Self {
+        Self {
+            username: String::new(),
+            password: String::new(),
+            base_url: None,
+            token: None,
+            user_id: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -219,7 +236,7 @@ impl BackendError {
     pub fn not_configured() -> Self {
         Self {
             kind: BackendErrorKind::NotConfigured,
-            detail: "no store contract address is saved for this account".into(),
+            detail: "this store is not signed in".into(),
         }
     }
 

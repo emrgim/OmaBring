@@ -175,6 +175,13 @@ fn print_search(query: &str) -> glib::ExitCode {
     let backend = Registry::live();
     match core.search(query, &backend) {
         Ok(comparison) => {
+            for note in &comparison.notes {
+                if note.count == 0 {
+                    if let Some(detail) = &note.detail {
+                        eprintln!("{}: {detail}", note.store.name());
+                    }
+                }
+            }
             if comparison.offers.is_empty() {
                 println!("no matching products");
             } else {

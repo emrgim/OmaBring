@@ -384,49 +384,26 @@ impl App {
         let mut notes = Vec::new();
         let mut jobs = Vec::new();
         for store in StoreId::all() {
-            match self.secrets_for(store)? {
-                None => notes.push(StoreNote {
-                    store,
-                    linked: false,
-                    live: LiveState::Off,
-                    detail: None,
-                    count: 0,
-                }),
-                Some(secrets) => {
-                    let configured = secrets
-                        .base_url
-                        .as_deref()
-                        .map(str::trim)
-                        .filter(|url| !url.is_empty())
-                        .is_some();
-                    if configured {
-                        jobs.push((store, secrets));
-                    } else {
-                        notes.push(StoreNote {
-                            store,
-                            linked: true,
-                            live: LiveState::NotConfigured,
-                            detail: Some(
-                                "saved account has no contract address; history is still searched"
-                                    .into(),
-                            ),
-                            count: 0,
-                        });
-                    }
-                }
-            }
+            let secrets = self.secrets_for(store)?.unwrap_or_else(StoreSecrets::blank);
+            let linked = !secrets.username.trim().is_empty();
+            jobs.push((store, secrets, linked));
         }
         let mut offers = Vec::new();
         std::thread::scope(|scope| {
             let mut handles = Vec::new();
-            for (store, secrets) in &jobs {
-                handles
-                    .push(scope.spawn(|| (*store, backend.search_store(*store, secrets, query))));
+            for (store, secrets, linked) in &jobs {
+                let linked = *linked;
+                handles.push(
+                    scope.spawn(move || {
+                        (*store, linked, backend.search_store(*store, secrets, query))
+                    }),
+                );
             }
             for handle in handles {
-                let (store, result) = handle.join().unwrap_or_else(|_| {
+                let (store, linked, result) = handle.join().unwrap_or_else(|_| {
                     (
                         StoreId::Carrefour,
+                        false,
                         Err(crate::model::BackendError::unavailable("search stopped")),
                     )
                 });
@@ -436,7 +413,7 @@ impl App {
                         offers.extend(found);
                         notes.push(StoreNote {
                             store,
-                            linked: true,
+                            linked,
                             live: LiveState::Ok,
                             detail: None,
                             count,
@@ -444,7 +421,7 @@ impl App {
                     }
                     Err(err) => notes.push(StoreNote {
                         store,
-                        linked: true,
+                        linked,
                         live: match err.kind {
                             BackendErrorKind::NotConfigured => LiveState::NotConfigured,
                             BackendErrorKind::Unsupported => LiveState::Unsupported,
@@ -493,13 +470,13 @@ impl App {
             )
         };
         if let Some(secrets) = self.secrets_for(store)? {
-            if secrets
-                .base_url
+            let signed_in = secrets
+                .token
                 .as_deref()
                 .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .is_some()
-            {
+                .filter(|token| !token.is_empty())
+                .is_some();
+            if signed_in || store.remote_checkout() {
                 match backend.checkout_store(store, &secrets, &cart) {
                     Ok(remote) => {
                         if let Some(remote_url) = remote.url {
@@ -507,9 +484,9 @@ impl App {
                         }
                         note = match remote.reference {
                             Some(reference) => {
-                                format!("Store contract accepted the cart ({reference}).")
+                                format!("The store accepted the cart ({reference}).")
                             }
-                            None => "Store contract accepted the cart.".into(),
+                            None => "The store accepted the cart.".into(),
                         };
                     }
                     Err(err)
@@ -517,7 +494,7 @@ impl App {
                             || err.kind == BackendErrorKind::NotConfigured => {}
                     Err(err) => {
                         note = format!(
-                            "Local cart prepared. Store contract did not accept it: {}.",
+                            "Local cart prepared. The store did not accept it: {}.",
                             err.detail
                         );
                     }
@@ -1106,7 +1083,9 @@ mod tests {
             &StoreSecrets {
                 username: "shopper".into(),
                 password: "s3cret-value".into(),
-                base_url: Some("https://contracts.example".into()),
+                base_url: None,
+                token: Some("session-token".into()),
+                user_id: None,
             },
         )
         .unwrap();
@@ -1185,7 +1164,9 @@ waitrose,W-1,2026-03-02,AED,Oat Milk,1,piece,11\n";
             &StoreSecrets {
                 username: "s".into(),
                 password: "password1".into(),
-                base_url: Some("https://contracts.example".into()),
+                base_url: None,
+                token: Some("t".into()),
+                user_id: None,
             },
         )
         .unwrap();

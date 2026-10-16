@@ -9,9 +9,7 @@ use axum::{Json, Router};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use chrono::Utc;
-use omabring_core::{
-    App, AuthzPoll, ClientAuth, Error, SpendRange, StoreId, StoreSecrets, VERSION,
-};
+use omabring_core::{App, AuthzPoll, ClientAuth, Error, SpendRange, StoreId, VERSION};
 use omabring_stores::Registry;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -354,16 +352,9 @@ fn call_tool(
         "link_store" => {
             let store =
                 StoreId::parse(&text("store")).ok_or_else(|| "unknown store".to_string())?;
-            let base = text("base_url");
-            let secrets = StoreSecrets {
-                username: text("username"),
-                password: text("password"),
-                base_url: if base.trim().is_empty() {
-                    None
-                } else {
-                    Some(base)
-                },
-            };
+            let secrets = backend
+                .sign_in(store, &text("username"), &text("password"))
+                .map_err(|err| err.detail)?;
             app.link_store(store, &secrets)
                 .map_err(|err| err.to_string())?;
             Ok(json!({ "linked": store.as_str() }))
@@ -499,8 +490,7 @@ fn tool_defs() -> Value {
             json!({
                 "store": {"type": "string"},
                 "username": {"type": "string"},
-                "password": {"type": "string"},
-                "base_url": {"type": "string", "description": "Optional store contract address."}
+                "password": {"type": "string"}
             })
         ),
         tool(
@@ -511,7 +501,7 @@ fn tool_defs() -> Value {
         ),
         tool(
             "search",
-            "Search linked store contracts and receipt history.",
+            "Search the UAE store catalogs and receipt history.",
             &["query"],
             json!({"query": {"type": "string"}})
         ),

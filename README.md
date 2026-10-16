@@ -8,7 +8,7 @@ The window is GTK 4 and libadwaita. It follows the active Omarchy theme and runs
 
 - One grocery record for the person signed in to the machine. OmaBring does not ask for its own email or password.
 - Store sign-ins for Carrefour, Union Coop, Grandiose, Spinneys, Waitrose, MMI, and African & Eastern. Usernames and passwords are encrypted with a machine key in the data directory (`0600`).
-- Product search and price comparison across linked stores and imported receipts.
+- Product search and price comparison across the seven store catalogs and imported receipts. Search does not need a store sign-in.
 - A cart for every store, and checkout that prepares the cart. Payment stays on the store website.
 - Receipt import from JSON or CSV, with spending totals for this month, last month, and the last 7, 30, or 365 days.
 - A rebuy forecast from repeat purchases: next date, status, and a likelihood score. One-off buys and items quiet for more than 90 days are left off the list.
@@ -50,22 +50,21 @@ Redirect addresses must be `https`, `omabring://`, or loopback `http`. Public cl
 
 MCP tools: `whoami`, `list_stores`, `link_store`, `unlink_store`, `search`, `compare`, `cart_list`, `cart_add`, `cart_update`, `cart_remove`, `cart_clear`, `checkout`, `import_invoice`, `list_invoices`, `spend`, `forecast`.
 
-## Store contract
+## Stores
 
-Each store is an adapter behind one interface: search, and checkout when that store can take a remote cart.
+Search calls each shop's own catalog. No sign-in is required to search.
 
-Live calls run only when the saved account has a contract address (`base_url`). That address must be `https`, or loopback `http`. The adapter then calls:
+| Store | Catalog |
+| --- | --- |
+| Carrefour | Constructor.io product search |
+| Grandiose | Magento GraphQL `products` |
+| Union Coop | Algolia config published by the storefront |
+| Waitrose | Public search page |
+| Spinneys | Public search page |
+| MMI | Retter `searchProductsV2` |
+| African & Eastern | Magento GraphQL `products` |
 
-| Call | Request | Success body |
-| --- | --- | --- |
-| Search | `GET {base}/omabring/search?q=` | `{"products":[{"id","name","price","currency","unit"}]}` |
-| Checkout | `POST {base}/omabring/checkout` with `{"store","lines"}` | `{"status":"ready","url","reference"}` |
-
-`status` may also be `prepared` or `accepted`.
-
-Carrefour, Union Coop, and Grandiose can push that checkout. Spinneys, Waitrose, MMI, and African & Eastern keep the cart locally and do not submit a remote cart. OmaBring does not open a browser or any address. MMI and African & Eastern are search-and-list stores in OmaBring.
-
-If a contract address is missing, or the endpoint does not answer in that shape, search still uses imported receipts and the local cart still works. The public storefronts are not assumed to implement this contract. Point `base_url` at an endpoint that does when you have one.
+Sign-in uses the store's own login and keeps the session token encrypted with the other credentials. Grandiose and Union Coop can then receive the cart on checkout. Carrefour sign-in posts to the store login. Waitrose and Spinneys keep the cart on their websites. OmaBring does not open a browser or any address. Receipt history is still included in search results.
 
 Default websites, used when checkout stays on the store:
 

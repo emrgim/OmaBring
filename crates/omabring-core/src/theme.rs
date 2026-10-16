@@ -174,6 +174,9 @@ window.omabring {{
   --omabring-card-bg: {lighter};
   --omabring-selection: {selection};
   --omabring-border: {border};
+  --omabring-line: {fg};
+  --omabring-fill: {fg};
+  --omabring-on-fill: {bg};
   --omabring-danger: {red};
   --omabring-ok: {green};
   --omabring-warn: {yellow};
@@ -201,12 +204,12 @@ window.omabring textview {{
 
 window.omabring .bf-header {{
   background-color: var(--omabring-bg);
-  border-bottom: 1px dashed var(--omabring-border);
+  border-bottom: 1px dashed var(--omabring-line);
 }}
 
 window.omabring .bf-mark {{
-  background-color: var(--omabring-accent);
-  color: var(--omabring-accent-fg);
+  background-color: var(--omabring-fill);
+  color: var(--omabring-on-fill);
   font-weight: 700;
   font-size: 13px;
   min-width: 34px;
@@ -219,16 +222,26 @@ window.omabring .bf-brand {{
   letter-spacing: 0.3px;
 }}
 
-window.omabring .bf-kicker,
-window.omabring .bf-field,
-window.omabring .bf-muted {{
+window.omabring .bf-kicker {{
+  color: var(--omabring-muted);
+  font-size: 10px;
+  letter-spacing: 1.6px;
+}}
+
+window.omabring .bf-field {{
   color: var(--omabring-muted);
   font-size: 11px;
-  letter-spacing: 1px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+}}
+
+window.omabring .bf-muted {{
+  color: var(--omabring-muted);
+  font-size: 13px;
 }}
 
 window.omabring .bf-h1 {{
-  font-size: 28px;
+  font-size: 32px;
   font-weight: 700;
   letter-spacing: 0.4px;
 }}
@@ -240,7 +253,7 @@ window.omabring .bf-h1-sm {{
 }}
 
 window.omabring .bf-go {{
-  color: var(--omabring-accent);
+  color: var(--omabring-fg);
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.8px;
@@ -252,7 +265,7 @@ window.omabring .bf-delta {{
 }}
 
 window.omabring .bf-ok {{
-  color: var(--omabring-ok);
+  color: var(--omabring-fg);
   font-size: 12px;
   font-weight: 700;
 }}
@@ -262,18 +275,18 @@ window.omabring .bf-danger {{
 }}
 
 window.omabring button {{
-  background-color: var(--omabring-accent);
-  color: var(--omabring-accent-fg);
-  border: 1px solid var(--omabring-accent);
+  background-color: var(--omabring-fill);
+  color: var(--omabring-on-fill);
+  border: 1px solid var(--omabring-fill);
   border-radius: 0;
-  padding: 8px 12px;
+  padding: 12px 16px;
   min-height: 0;
   font-weight: 700;
   box-shadow: none;
 }}
 
 window.omabring button label {{
-  color: var(--omabring-accent-fg);
+  color: var(--omabring-on-fill);
   font-weight: 700;
 }}
 
@@ -281,19 +294,30 @@ window.omabring button.bf-ghost,
 window.omabring button.bf-ghost label {{
   background-color: transparent;
   color: var(--omabring-fg);
-  border-color: var(--omabring-border);
+  border-color: var(--omabring-line);
 }}
 
 window.omabring button.bf-chip,
+window.omabring button.bf-chip label {{
+  background-color: transparent;
+  color: var(--omabring-muted);
+  border: 1px solid var(--omabring-line);
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  min-height: 0;
+}}
+
 window.omabring button.bf-tab,
-window.omabring button.bf-chip label,
 window.omabring button.bf-tab label {{
   background-color: transparent;
   color: var(--omabring-muted);
-  border: 1px solid var(--omabring-border);
-  padding: 4px 8px;
-  font-size: 11px;
-  letter-spacing: 0.4px;
+  border: 1px solid transparent;
+  padding: 7px 10px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
   min-height: 0;
 }}
 
@@ -301,9 +325,9 @@ window.omabring button.bf-chip.on,
 window.omabring button.bf-tab.on,
 window.omabring button.bf-chip.on label,
 window.omabring button.bf-tab.on label {{
-  background-color: var(--omabring-accent);
-  color: var(--omabring-accent-fg);
-  border-color: var(--omabring-accent);
+  background-color: var(--omabring-fill);
+  color: var(--omabring-on-fill);
+  border-color: var(--omabring-fill);
 }}
 
 window.omabring button.bf-tab:focus {{
@@ -311,10 +335,27 @@ window.omabring button.bf-tab:focus {{
 }}
 
 window.omabring .bf-card {{
-  background-color: var(--omabring-surface);
+  background-color: var(--omabring-bg);
   color: var(--omabring-fg);
-  border: 1px solid var(--omabring-border);
-  padding: 16px;
+  border: 1px solid var(--omabring-line);
+  padding: 18px 16px;
+}}
+
+window.omabring .bf-dash {{
+  padding: 10px 12px 8px;
+}}
+
+window.omabring .bf-filters {{
+  border-bottom: 1px solid var(--omabring-line);
+  padding: 0 0 8px;
+}}
+
+window.omabring .bf-theme {{
+  background-color: var(--omabring-fill);
+  color: var(--omabring-on-fill);
+  font-size: 12px;
+  font-weight: 700;
+  padding: 7px 10px;
 }}
 
 window.omabring .bf-dashed {{
@@ -330,15 +371,15 @@ window.omabring .bf-pill {{
 }}
 
 window.omabring .bf-pill.on {{
-  background-color: var(--omabring-accent);
-  color: var(--omabring-accent-fg);
-  border-color: var(--omabring-accent);
+  background-color: var(--omabring-fill);
+  color: var(--omabring-on-fill);
+  border-color: var(--omabring-fill);
 }}
 
 window.omabring .bf-cap {{
-  background-color: var(--omabring-accent);
-  color: var(--omabring-accent-fg);
-  padding: 2px 6px;
+  background-color: var(--omabring-fill);
+  color: var(--omabring-on-fill);
+  padding: 3px 8px;
   font-size: 11px;
   font-weight: 700;
 }}
@@ -385,23 +426,24 @@ window.omabring .bf-bar-fill {{
 
 window.omabring .bf-bar.on {{
   border: 1px solid var(--omabring-accent);
+  color: var(--omabring-accent);
 }}
 
 window.omabring .bf-row {{
   background-color: transparent;
-  border-bottom: 1px dashed var(--omabring-border);
+  border-bottom: 1px dashed var(--omabring-line);
   padding: 8px 4px;
 }}
 
 window.omabring .bf-row:hover,
 window.omabring .bf-row:hover label {{
-  background-color: var(--omabring-accent);
-  color: var(--omabring-accent-fg);
+  background-color: var(--omabring-fill);
+  color: var(--omabring-on-fill);
 }}
 
 window.omabring .bf-thead {{
-  border-bottom: 1px solid var(--omabring-border);
-  padding: 6px 4px;
+  border-bottom: 1px solid var(--omabring-line);
+  padding: 10px 8px;
 }}
 
 window.omabring .bf-thead label {{
@@ -434,11 +476,11 @@ window.omabring searchentry,
 window.omabring spinbutton {{
   background-color: var(--omabring-bg);
   color: var(--omabring-fg);
-  border: 1px solid var(--omabring-border);
+  border: 1px solid var(--omabring-line);
   border-radius: 0;
   box-shadow: none;
   min-height: 0;
-  padding: 8px 10px;
+  padding: 12px 13px;
 }}
 
 window.omabring textview,
