@@ -241,26 +241,26 @@ pub fn classify(rec: &BuyRec, today: NaiveDate, excluded: bool, vote: &str) -> F
         (None, String::new())
     };
     let pack = pack_reason(&name).or_else(|| pack_reason(&receipt));
-    let mut reason;
+    let reason: String;
     let mut include = false;
     if excluded {
-        reason = "excluded".into();
+        reason = "excluded".to_string();
     } else if SKIP_NAME.iter().any(|b| name.to_ascii_lowercase().contains(b) || receipt.to_ascii_lowercase().contains(b))
     {
-        reason = "noise".into();
+        reason = "noise".to_string();
     } else if times < 2 || gaps.is_empty() {
-        reason = "too_few_buys".into();
+        reason = "too_few_buys".to_string();
     } else if let Some(p) = pack {
-        reason = p.into();
+        reason = p.to_string();
     } else if weighted > MAX_INTERVAL_DAYS {
-        reason = "interval_too_long".into();
+        reason = "interval_too_long".to_string();
     } else if cv > MAX_CV {
-        reason = "irregular".into();
+        reason = "irregular".to_string();
     } else if last.is_some()
         && elapsed.is_some()
         && (elapsed.unwrap() > MAX_LAST_AGE_DAYS || elapsed.unwrap() as f64 > LAPSED_FACTOR * weighted.max(1.0))
     {
-        reason = "lapsed".into();
+        reason = "lapsed".to_string();
     } else {
         include = true;
         reason = match due_in {
@@ -269,7 +269,7 @@ pub fn classify(rec: &BuyRec, today: NaiveDate, excluded: bool, vote: &str) -> F
             Some(1) => "regular_due_tomorrow",
             _ => "regular_upcoming",
         }
-        .into();
+        .to_string();
     }
     let score = likely_score(times, gaps.len(), weighted, cv, elapsed, &reason, excluded);
     let status = match reason.as_str() {
