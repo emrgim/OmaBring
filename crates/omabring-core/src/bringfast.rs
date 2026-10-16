@@ -131,8 +131,22 @@ impl App {
         }
         let receipts = options.receipts_dir.clone();
         self.with_conn(|dest| {
-            import_invoices(&source, dest, self, options.dry_run, receipts.as_deref(), &mut report)?;
-            import_products(&source, dest, self, options.dry_run, receipts.as_deref(), &mut report)?;
+            import_invoices(
+                &source,
+                dest,
+                self,
+                options.dry_run,
+                receipts.as_deref(),
+                &mut report,
+            )?;
+            import_products(
+                &source,
+                dest,
+                self,
+                options.dry_run,
+                receipts.as_deref(),
+                &mut report,
+            )?;
             import_aliases(&source, dest, options.dry_run, &mut report)?;
             import_carts(&source, dest, options.dry_run, &mut report)?;
             import_shopping(&source, dest, options.dry_run, &mut report)?;
@@ -300,7 +314,11 @@ fn flexible_invoice_date(raw: Option<&str>) -> String {
         .unwrap_or_else(|| "1970-01-01".into())
 }
 
-fn existing_invoice(dest: &Connection, store: &str, invoice_no: &str) -> Result<Option<(i64, String)>> {
+fn existing_invoice(
+    dest: &Connection,
+    store: &str,
+    invoice_no: &str,
+) -> Result<Option<(i64, String)>> {
     dest.query_row(
         "SELECT id, purchased_on FROM invoices WHERE store = ?1 AND invoice_no = ?2",
         params![store, invoice_no],
@@ -419,13 +437,7 @@ fn image_known(dest: &Connection, key: &str) -> Result<bool> {
         .is_some())
 }
 
-fn write_image(
-    dest: &Connection,
-    app: &App,
-    key: &str,
-    source: &str,
-    bytes: &[u8],
-) -> Result<()> {
+fn write_image(dest: &Connection, app: &App, key: &str, source: &str, bytes: &[u8]) -> Result<()> {
     let Some(ext) = crate::household::image_ext(bytes) else {
         return Ok(());
     };
@@ -536,8 +548,7 @@ fn import_aliases(
     if !table_exists(source, "product_aliases") {
         return Ok(());
     }
-    let mut stmt =
-        source.prepare("SELECT alias_key, canonical_key FROM product_aliases")?;
+    let mut stmt = source.prepare("SELECT alias_key, canonical_key FROM product_aliases")?;
     let rows = stmt.query_map([], |row| {
         Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
     })?;

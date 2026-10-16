@@ -60,6 +60,16 @@ impl Registry {
         let _ = self;
         catalog::sign_in(store, username, password)
     }
+
+    /// Catalog picture URL for a product name, from that store's public search.
+    pub fn product_image(
+        &self,
+        store: StoreId,
+        query: &str,
+    ) -> std::result::Result<Option<String>, BackendError> {
+        let _ = self;
+        catalog::product_image(store, query)
+    }
 }
 
 impl StoreBackend for Registry {

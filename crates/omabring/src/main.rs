@@ -29,6 +29,15 @@ fn install_icon_fallback() {
     if std::fs::write(&png, include_bytes!("../../../assets/image-missing.png")).is_err() {
         return;
     }
+    let actions = dir.join("hicolor/scalable/actions");
+    if std::fs::create_dir_all(&actions).is_ok() {
+        let _ = std::fs::write(
+            actions.join("omabring-agent-symbolic.svg"),
+            include_bytes!(
+                "../../../assets/icons/hicolor/scalable/actions/omabring-agent-symbolic.svg"
+            ),
+        );
+    }
     gtk::IconTheme::for_display(&display).add_search_path(&dir);
 }
 
@@ -110,7 +119,15 @@ fn main() -> glib::ExitCode {
             }
             None => None,
         };
-        return import_bringfast(&path, dry_run, receipts_dir.as_deref(), store_accounts);
+        let fetch_images = !args.iter().any(|arg| arg == "--no-fetch-images")
+            && std::env::var("OMABRING_FETCH_IMAGES").ok().as_deref() != Some("0");
+        return import_bringfast(
+            &path,
+            dry_run,
+            receipts_dir.as_deref(),
+            store_accounts,
+            fetch_images,
+        );
     }
     // These commands print and exit before GTK starts, so an SSH session
     // with no display can smoke-test a local install.
@@ -139,6 +156,15 @@ fn main() -> glib::ExitCode {
             Ok(query) => std::env::set_var("OMABRING_QUERY", query),
             Err(()) => {
                 eprintln!("omabring --gui-search needs a product name");
+                return glib::ExitCode::from(2);
+            }
+        }
+    }
+    if let Some(product) = flag_value(&args, "--product") {
+        match product {
+            Ok(name) => std::env::set_var("OMABRING_PRODUCT", name),
+            Err(()) => {
+                eprintln!("omabring --product needs a product name");
                 return glib::ExitCode::from(2);
             }
         }
@@ -234,6 +260,7 @@ fn import_bringfast(
     dry_run: bool,
     receipts_dir: Option<&str>,
     store_accounts: bool,
+    fetch_images: bool,
 ) -> glib::ExitCode {
     let core = match App::open(default_data_dir()) {
         Ok(core) => core,
@@ -250,6 +277,9 @@ fn import_bringfast(
     match core.import_bringfast(std::path::Path::new(path), &options) {
         Ok(report) => {
             print!("{report}");
+            if fetch_images && !dry_run {
+                backfill_images(&core);
+            }
             glib::ExitCode::SUCCESS
         }
         Err(err) => {
@@ -257,6 +287,45 @@ fn import_bringfast(
             glib::ExitCode::from(1)
         }
     }
+}
+
+/// Pictures Bring Fast would attach by searching the store that sold the product.
+fn backfill_images(core: &App) {
+    let missing = match core.products_missing_images() {
+        Ok(rows) => rows,
+        Err(err) => {
+            eprintln!("image search skipped: {err}");
+            return;
+        }
+    };
+    if missing.is_empty() {
+        return;
+    }
+    eprintln!("searching stores for {} product images", missing.len());
+    let backend = Registry::live();
+    let mut saved = 0usize;
+    for (index, item) in missing.iter().enumerate() {
+        for store in image_stores(item.store) {
+            let url = match backend.product_image(store, &item.name) {
+                Ok(Some(url)) => url,
+                _ => continue,
+            };
+            if core.cache_remote_image(&item.name, &url).unwrap_or(false) {
+                saved += 1;
+                break;
+            }
+        }
+        if (index + 1) % 25 == 0 {
+            eprintln!("images {}/{} saved {saved}", index + 1, missing.len());
+        }
+    }
+    eprintln!("saved {saved} product images");
+}
+
+fn image_stores(primary: StoreId) -> Vec<StoreId> {
+    let mut stores = vec![primary, StoreId::Carrefour];
+    stores.dedup();
+    stores
 }
 
 fn print_search(query: &str) -> glib::ExitCode {
@@ -358,6 +427,15 @@ mod cli_tests {
         assert_eq!(
             flag_value(&args, "--import-bringfast").unwrap().unwrap(),
             "bringfast.db"
+        );
+        let args = vec![
+            "omabring".into(),
+            "--product".into(),
+            "Full Fat Milk".into(),
+        ];
+        assert_eq!(
+            flag_value(&args, "--product").unwrap().unwrap(),
+            "Full Fat Milk"
         );
     }
 

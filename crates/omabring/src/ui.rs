@@ -28,12 +28,23 @@ enum Grain {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SortKey {
-    Last,
     Likely,
     Times,
+    Qty,
     Spent,
     Frequency,
     Name,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ChartKind {
+    Price,
+    PriceByStore,
+    QtyMonth,
+    SpendMonth,
+    SpendYear,
+    StoreCompare,
+    Cumulative,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -62,7 +73,6 @@ struct Shell {
     tab_settings: gtk::Button,
     tab_forecast: gtk::Button,
     search_entry: gtk::Entry,
-    filter_entry: gtk::Entry,
     filters: gtk::Box,
     agent_button: gtk::Button,
     service_label: gtk::Label,
@@ -73,8 +83,9 @@ struct Shell {
     custom_start: String,
     custom_end: String,
     sort: SortKey,
+    sort_desc: bool,
     shortage: bool,
-    store_filter: Option<StoreId>,
+    chart: ChartKind,
     checkout_note: String,
     import_open: bool,
     compare: Vec<Offer>,
@@ -240,9 +251,6 @@ fn build_chrome(
         button.add_css_class("bf-tab");
         button
     };
-    let filter_entry = gtk::Entry::new();
-    filter_entry.set_placeholder_text(Some("Find a product"));
-    filter_entry.set_hexpand(true);
     let filters = gtk::Box::new(gtk::Orientation::Vertical, 6);
     filters.add_css_class("bf-pin");
     let agent_button = agent_button();
@@ -268,7 +276,6 @@ fn build_chrome(
         tab_settings: tab("SETTINGS"),
         tab_forecast: tab("FORECAST"),
         search_entry,
-        filter_entry,
         filters,
         agent_button,
         service_label: service,
@@ -279,8 +286,9 @@ fn build_chrome(
         custom_start: String::new(),
         custom_end: String::new(),
         sort: SortKey::Spent,
+        sort_desc: true,
         shortage: false,
-        store_filter: None,
+        chart: ChartKind::Price,
         checkout_note: "Checkout prepares the cart. Payment stays with the store.".into(),
         import_open: false,
         compare: Vec::new(),
@@ -297,9 +305,6 @@ fn build_chrome(
     let shell_entry = shell.clone();
     let entry = shell.borrow().search_entry.clone();
     entry.connect_activate(move |entry| run_search(&shell_entry, entry));
-    let shell_filter = shell.clone();
-    let filter = shell.borrow().filter_entry.clone();
-    filter.connect_activate(move |entry| open_product(&shell_filter, entry));
     let shell_agent = shell.clone();
     shell
         .borrow()
@@ -382,7 +387,10 @@ fn scroll_main(window: &adw::ApplicationWindow, by: f64) {
     fn walk(widget: &gtk::Widget, best: &mut Option<(f64, gtk::ScrolledWindow)>) {
         if let Some(scroll) = widget.downcast_ref::<gtk::ScrolledWindow>() {
             let upper = scroll.vadjustment().upper();
-            let replace = best.as_ref().map(|(score, _)| upper > *score).unwrap_or(true);
+            let replace = best
+                .as_ref()
+                .map(|(score, _)| upper > *score)
+                .unwrap_or(true);
             if replace {
                 *best = Some((upper, scroll.clone()));
             }
@@ -760,18 +768,6 @@ fn forecast_page(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
     page
 }
 
-fn open_product(shell: &Rc<RefCell<Shell>>, entry: &gtk::Entry) {
-    let name = entry.text().trim().to_string();
-    if name.is_empty() {
-        return;
-    }
-    let mut state = shell.borrow_mut();
-    state.compare_for.clear();
-    state.page = Page::Product(name);
-    drop(state);
-    schedule(shell);
-}
-
 fn purchases(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
     let page = gtk::Box::new(gtk::Orientation::Vertical, 12);
     page.append(&board(shell, true));
@@ -855,7 +851,7 @@ fn board(shell: &Rc<RefCell<Shell>>, purchases: bool) -> gtk::Box {
 
     if !purchases {
         page.append(&trend_card(&view.products));
-        page.append(&product_table(shell, &view.products, true));
+        page.append(&product_table(shell, &view.products, false));
     }
     page
 }
@@ -863,10 +859,10 @@ fn board(shell: &Rc<RefCell<Shell>>, purchases: bool) -> gtk::Box {
 fn grain_row(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
     for (grain, label) in [
-        (Grain::Daily, "DAILY"),
-        (Grain::Weekly, "WEEKLY"),
-        (Grain::Monthly, "MONTHLY"),
-        (Grain::Yearly, "YEARLY"),
+        (Grain::Daily, "Daily"),
+        (Grain::Weekly, "Weekly"),
+        (Grain::Monthly, "Monthly"),
+        (Grain::Yearly, "Yearly"),
     ] {
         let button = chip(label, shell.borrow().grain == grain);
         let shell_click = shell.clone();
@@ -1044,23 +1040,37 @@ fn trend_card(products: &[Prod]) -> gtk::Box {
 fn product_table(shell: &Rc<RefCell<Shell>>, products: &[Prod], full: bool) -> gtk::Box {
     let card = gtk::Box::new(gtk::Orientation::Vertical, 0);
     card.add_css_class("bf-card");
+    let tools = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+    tools.set_halign(gtk::Align::End);
+    tools.add_css_class("bf-thead");
+    tools.append(&shortage_header(shell));
+    card.append(&tools);
     let head = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     head.add_css_class("bf-thead");
     head.append(&cell("", 48, false));
-    let name = sort_header(shell, "Product", SortKey::Name, 0);
+    let name = sort_header(shell, "Product", SortKey::Name, 0, false);
     name.set_hexpand(true);
     head.append(&name);
-    head.append(&sort_header(shell, "Last", SortKey::Last, 96));
-    head.append(&sort_header(shell, "Times", SortKey::Times, 64));
+    head.append(&sort_header(shell, "Times", SortKey::Times, 64, true));
     if full {
-        head.append(&cell("Units", 72, true));
-        head.append(&sort_header(shell, "Frequency", SortKey::Frequency, 120));
+        head.append(&sort_header(shell, "Units", SortKey::Qty, 72, true));
+        head.append(&sort_header(
+            shell,
+            "Frequency",
+            SortKey::Frequency,
+            120,
+            false,
+        ));
+        head.append(&sort_header(shell, "Likely", SortKey::Likely, 64, true));
     }
-    head.append(&sort_header(shell, "Likely", SortKey::Likely, 64));
-    head.append(&sort_header(shell, "Spent", SortKey::Spent, 110));
+    head.append(&sort_header(shell, "Spent", SortKey::Spent, 110, true));
     card.append(&head);
     if products.is_empty() {
-        let empty = gtk::Label::new(Some("No invoices yet."));
+        let empty = gtk::Label::new(Some(if shell.borrow().shortage {
+            "Nothing is short in this range."
+        } else {
+            "No invoices yet."
+        }));
         empty.add_css_class("bf-muted");
         empty.set_xalign(0.0);
         empty.set_margin_top(12);
@@ -1074,13 +1084,12 @@ fn product_table(shell: &Rc<RefCell<Shell>>, products: &[Prod], full: bool) -> g
         let name = cell(&product.name, 0, false);
         name.set_hexpand(true);
         row.append(&name);
-        row.append(&cell(&product.last.format("%Y-%m-%d").to_string(), 96, false));
         row.append(&cell(&product.times.to_string(), 64, true));
         if full {
             row.append(&cell(&qty_text(product.qty), 72, true));
             row.append(&cell(&frequency_label(product), 120, false));
+            row.append(&cell(&product.likely.to_string(), 64, true));
         }
-        row.append(&cell(&product.likely.to_string(), 64, true));
         row.append(&cell(&format!("AED {:.2}", product.spent), 110, true));
         let click = gtk::GestureClick::new();
         let shell_click = shell.clone();
@@ -1537,19 +1546,27 @@ fn product_page(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
         stats.append(&kpi(&format!("AED {:.2}", item.min), "MIN"));
         stats.append(&kpi(&format!("AED {:.2}", item.max), "MAX"));
         stats.append(&kpi(
-            if item.last.is_empty() { "—" } else { &item.last },
+            if item.last.is_empty() {
+                "—"
+            } else {
+                &item.last
+            },
             "LAST",
         ));
         stats.append(&kpi(&item.frequency, "FREQUENCY"));
         stats.append(&kpi(&item.likely.to_string(), "LIKELY"));
         stats.append(&kpi(
-            if item.next.is_empty() { "—" } else { &item.next },
+            if item.next.is_empty() {
+                "—"
+            } else {
+                &item.next
+            },
             "NEXT",
         ));
     }
     page.append(&stats);
     if let Some(item) = &history {
-        page.append(&price_chart(item));
+        page.append(&product_chart(shell, item));
         page.append(&store_prices(item));
         page.append(&purchase_list(shell, item));
     }
@@ -1625,13 +1642,14 @@ fn offer_row(shell: &Rc<RefCell<Shell>>, offer: &Offer) -> gtk::Box {
     row
 }
 
-fn price_chart(item: &omabring_core::ProductHistory) -> gtk::Box {
+fn product_chart(shell: &Rc<RefCell<Shell>>, item: &omabring_core::ProductHistory) -> gtk::Box {
     let card = gtk::Box::new(gtk::Orientation::Vertical, 6);
     card.add_css_class("bf-card");
-    let kicker = gtk::Label::new(Some("PRICE PAID"));
+    let kicker = gtk::Label::new(Some("CHART"));
     kicker.add_css_class("bf-kicker");
     kicker.set_xalign(0.0);
     card.append(&kicker);
+    card.append(&chart_selector(shell));
     if item.points.is_empty() {
         let empty = gtk::Label::new(Some("No priced buys yet."));
         empty.add_css_class("bf-muted");
@@ -1639,31 +1657,161 @@ fn price_chart(item: &omabring_core::ProductHistory) -> gtk::Box {
         card.append(&empty);
         return card;
     }
-    let mut buckets: Vec<(String, f64, u32)> = Vec::new();
+    let kind = shell.borrow().chart;
+    let note = gtk::Label::new(Some(&chart_caption(kind, item)));
+    note.add_css_class("bf-muted");
+    note.set_xalign(0.0);
+    wrap_label(&note);
+    card.append(&note);
+    if kind == ChartKind::PriceByStore {
+        card.append(&price_by_store_chart(item));
+    } else {
+        card.append(&bars(&chart_buckets(kind, item)));
+    }
+    card
+}
+
+fn chart_selector(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+    row.add_css_class("bf-charts");
+    row.set_halign(gtk::Align::Start);
+    for (kind, label) in [
+        (ChartKind::Price, "Price"),
+        (ChartKind::PriceByStore, "By store"),
+        (ChartKind::QtyMonth, "Qty"),
+        (ChartKind::SpendMonth, "Spend"),
+        (ChartKind::SpendYear, "Year"),
+        (ChartKind::StoreCompare, "Compare"),
+        (ChartKind::Cumulative, "Total"),
+    ] {
+        let button = chip(label, shell.borrow().chart == kind);
+        button.add_css_class("bf-chart");
+        button.set_size_request(72, 28);
+        let shell_click = shell.clone();
+        button.connect_clicked(move |_| {
+            shell_click.borrow_mut().chart = kind;
+            schedule(&shell_click);
+        });
+        row.append(&button);
+    }
+    row
+}
+
+fn chart_caption(kind: ChartKind, item: &omabring_core::ProductHistory) -> String {
+    match kind {
+        ChartKind::Price => format!(
+            "Price paid · {} → {} · AED {:.2} to AED {:.2}",
+            item.first, item.last, item.min, item.max
+        ),
+        ChartKind::PriceByStore => "Price paid over time, one row per store".into(),
+        ChartKind::QtyMonth => "Units bought each month".into(),
+        ChartKind::SpendMonth => "Spend each month".into(),
+        ChartKind::SpendYear => "Spend each year".into(),
+        ChartKind::StoreCompare => "Last price paid at each store".into(),
+        ChartKind::Cumulative => "Cumulative spend".into(),
+    }
+}
+
+fn price_by_store_chart(item: &omabring_core::ProductHistory) -> gtk::Box {
+    let wrap = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    let mut stores: Vec<StoreId> = Vec::new();
     for point in &item.points {
-        let key = point.date.format("%Y-%m").to_string();
+        if !stores.contains(&point.store) {
+            stores.push(point.store);
+        }
+    }
+    for store in stores {
+        let title = gtk::Label::new(Some(&store_label(store).to_uppercase()));
+        title.add_css_class("bf-kicker");
+        title.set_xalign(0.0);
+        wrap.append(&title);
+        let points: Vec<_> = item
+            .points
+            .iter()
+            .filter(|point| point.store == store)
+            .cloned()
+            .collect();
+        wrap.append(&bars(&average_by(&points, "%Y-%m", |point| {
+            point.unit_price
+        })));
+    }
+    wrap
+}
+
+fn chart_buckets(kind: ChartKind, item: &omabring_core::ProductHistory) -> Vec<(String, f64)> {
+    match kind {
+        ChartKind::Price | ChartKind::PriceByStore => {
+            average_by(&item.points, "%Y-%m", |point| point.unit_price)
+        }
+        ChartKind::QtyMonth => sum_by(&item.points, "%Y-%m", |point| point.qty),
+        ChartKind::SpendMonth => {
+            sum_by(&item.points, "%Y-%m", |point| point.unit_price * point.qty)
+        }
+        ChartKind::SpendYear => sum_by(&item.points, "%Y", |point| point.unit_price * point.qty),
+        ChartKind::StoreCompare => item
+            .by_store
+            .iter()
+            .map(|row| (store_label(row.store).to_string(), row.last))
+            .collect(),
+        ChartKind::Cumulative => cumulative(&sum_by(&item.points, "%Y-%m", |point| {
+            point.unit_price * point.qty
+        })),
+    }
+}
+
+fn average_by(
+    points: &[omabring_core::PurchasePoint],
+    fmt: &str,
+    value: impl Fn(&omabring_core::PurchasePoint) -> f64,
+) -> Vec<(String, f64)> {
+    let mut buckets: Vec<(String, f64, u32)> = Vec::new();
+    for point in points {
+        let key = point.date.format(fmt).to_string();
+        let amount = value(point);
         if let Some(last) = buckets.last_mut() {
             if last.0 == key {
-                last.1 += point.unit_price;
+                last.1 += amount;
                 last.2 += 1;
                 continue;
             }
         }
-        buckets.push((key, point.unit_price, 1));
+        buckets.push((key, amount, 1));
     }
-    let bars_in: Vec<(String, f64)> = buckets
+    buckets
         .into_iter()
-        .map(|(key, sum, count)| (key, sum / count as f64))
-        .collect();
-    let note = gtk::Label::new(Some(&format!(
-        "{} → {} · AED {:.2} to AED {:.2}",
-        item.first, item.last, item.min, item.max
-    )));
-    note.add_css_class("bf-muted");
-    note.set_xalign(0.0);
-    card.append(&note);
-    card.append(&bars(&bars_in));
-    card
+        .map(|(key, sum, count)| (key, sum / count.max(1) as f64))
+        .collect()
+}
+
+fn sum_by(
+    points: &[omabring_core::PurchasePoint],
+    fmt: &str,
+    value: impl Fn(&omabring_core::PurchasePoint) -> f64,
+) -> Vec<(String, f64)> {
+    let mut buckets: Vec<(String, f64)> = Vec::new();
+    for point in points {
+        let key = point.date.format(fmt).to_string();
+        let amount = value(point);
+        if let Some(last) = buckets.last_mut() {
+            if last.0 == key {
+                last.1 += amount;
+                continue;
+            }
+        }
+        buckets.push((key, amount));
+    }
+    buckets
+}
+
+fn cumulative(buckets: &[(String, f64)]) -> Vec<(String, f64)> {
+    let mut running = 0.0;
+    buckets
+        .iter()
+        .map(|(key, amount)| {
+            running += amount;
+            (key.clone(), running)
+        })
+        .collect()
 }
 
 fn store_prices(item: &omabring_core::ProductHistory) -> gtk::Box {
@@ -1703,7 +1851,6 @@ fn purchase_list(shell: &Rc<RefCell<Shell>>, item: &omabring_core::ProductHistor
     for point in item.points.iter().rev() {
         let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         line.add_css_class("bf-row");
-        line.append(&store_logo_small(point.store));
         let when = cell(
             &format!(
                 "{} · {} · #{}",
@@ -1772,97 +1919,29 @@ fn paint_filters(shell: &Rc<RefCell<Shell>>) {
     }
     bar.append(&range_row(shell));
     bar.append(&date_row(shell));
-    bar.append(&sort_row(shell));
-    bar.append(&store_filter_row(shell));
-    let find = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    find.append(&shell.borrow().filter_entry);
-    let button = gtk::Button::with_label("OPEN");
-    let shell_find = shell.clone();
-    let entry = shell.borrow().filter_entry.clone();
-    button.connect_clicked(move |_| open_product(&shell_find, &entry));
-    find.append(&button);
-    bar.append(&find);
-}
-
-fn sort_row(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-    for (key, label) in [
-        (SortKey::Last, "Last"),
-        (SortKey::Likely, "Likely"),
-        (SortKey::Times, "Times"),
-        (SortKey::Spent, "Spent"),
-        (SortKey::Frequency, "Frequency"),
-    ] {
-        let button = chip(label, shell.borrow().sort == key && !shell.borrow().shortage);
-        let shell_click = shell.clone();
-        button.connect_clicked(move |_| {
-            let mut state = shell_click.borrow_mut();
-            state.sort = key;
-            state.shortage = false;
-            drop(state);
-            schedule(&shell_click);
-        });
-        row.append(&button);
-    }
-    let shortage = chip("Shortage", shell.borrow().shortage);
-    let shell_click = shell.clone();
-    shortage.connect_clicked(move |_| {
-        let mut state = shell_click.borrow_mut();
-        state.shortage = !state.shortage;
-        if state.shortage {
-            state.sort = SortKey::Likely;
-        }
-        drop(state);
-        schedule(&shell_click);
-    });
-    row.append(&shortage);
-    row
-}
-
-fn store_filter_row(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-    let all = chip("All", shell.borrow().store_filter.is_none());
-    let shell_all = shell.clone();
-    all.connect_clicked(move |_| {
-        shell_all.borrow_mut().store_filter = None;
-        schedule(&shell_all);
-    });
-    row.append(&all);
-    for id in StoreId::all() {
-        let on = shell.borrow().store_filter == Some(id);
-        let button = gtk::Button::new();
-        button.add_css_class("bf-chip");
-        if on {
-            button.add_css_class("on");
-        }
-        let inner = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        inner.append(&store_logo_small(id));
-        inner.append(&gtk::Label::new(Some(store_chip_label(id))));
-        button.set_child(Some(&inner));
-        let shell_click = shell.clone();
-        button.connect_clicked(move |_| {
-            shell_click.borrow_mut().store_filter = Some(id);
-            schedule(&shell_click);
-        });
-        row.append(&button);
-    }
-    row
 }
 
 fn agent_button() -> gtk::Button {
     let button = gtk::Button::new();
     button.add_css_class("bf-agent");
     button.set_tooltip_text(Some("Open the Omarchy agent"));
-    let bytes = gtk::glib::Bytes::from_static(include_bytes!("../../../assets/agent.png"));
-    if let Ok(texture) = gtk::gdk::Texture::from_bytes(&bytes) {
-        let picture = gtk::Picture::for_paintable(&texture);
-        picture.set_size_request(22, 22);
-        picture.set_content_fit(gtk::ContentFit::Contain);
-        button.set_child(Some(&picture));
-    } else {
-        button.set_label("AGENT");
-    }
+    button.set_child(Some(&agent_mark()));
     button
+}
+
+fn agent_mark() -> gtk::Image {
+    let name = if gtk::gdk::Display::default()
+        .map(|display| gtk::IconTheme::for_display(&display).has_icon("omabring-agent-symbolic"))
+        .unwrap_or(false)
+    {
+        "omabring-agent-symbolic"
+    } else {
+        "utilities-terminal-symbolic"
+    };
+    let image = gtk::Image::from_icon_name(name);
+    image.set_pixel_size(16);
+    image.add_css_class("bf-agent-icon");
+    image
 }
 
 fn launch_agent(shell: &Rc<RefCell<Shell>>) {
@@ -1873,9 +1952,7 @@ fn launch_agent(shell: &Rc<RefCell<Shell>>) {
     let config = core.data_dir().join("mcp.json");
     let _ = std::fs::write(
         &config,
-        format!(
-            r#"{{"mcpServers":{{"omabring":{{"type":"http","url":"{mcp}"}}}}}}"#
-        ),
+        format!(r#"{{"mcpServers":{{"omabring":{{"type":"http","url":"{mcp}"}}}}}}"#),
     );
     let argv = agent_argv(&id, &custom, &config);
     match spawn_terminal(&argv, &mcp) {
@@ -2316,9 +2393,9 @@ fn load_view(shell: &Rc<RefCell<Shell>>) -> ViewData {
     let today = chrono::Utc::now().date_naive();
     let invoices = shell_ref.core.list_invoices().unwrap_or_default();
     let (start, end) = window_for(&shell_ref, &invoices, today);
-    let store_filter = shell_ref.store_filter;
     let grain = shell_ref.grain;
     let sort = shell_ref.sort;
+    let sort_desc = shell_ref.sort_desc;
     let shortage = shell_ref.shortage;
     drop(shell_ref);
     let likely = likely_map(shell, today);
@@ -2330,7 +2407,6 @@ fn load_view(shell: &Rc<RefCell<Shell>>) -> ViewData {
             };
             date >= start && date <= end
         })
-        .filter(|invoice| store_filter.is_none() || store_filter == Some(invoice.store))
         .collect();
     let mut by_day: HashMap<NaiveDate, f64> = HashMap::new();
     for invoice in &filtered {
@@ -2346,7 +2422,7 @@ fn load_view(shell: &Rc<RefCell<Shell>>) -> ViewData {
     };
     let total: f64 = buckets.iter().map(|(_, n)| n).sum();
     let periods = buckets.len().max(1) as f64;
-    let mut products = products_from(&filtered, &likely, sort);
+    let mut products = products_from(&filtered, &likely, sort, sort_desc);
     if shortage {
         products.retain(|product| is_shortage(product, today));
     }
@@ -2496,6 +2572,7 @@ fn products_from(
     invoices: &[&InvoiceSummary],
     likely: &HashMap<String, u8>,
     sort: SortKey,
+    desc: bool,
 ) -> Vec<Prod> {
     let mut order: Vec<String> = Vec::new();
     let mut map: HashMap<String, Prod> = HashMap::new();
@@ -2541,18 +2618,28 @@ fn products_from(
         .into_iter()
         .filter_map(|key| map.remove(&key))
         .collect();
-    products.sort_by(|a, b| match sort {
-        SortKey::Last => b.last.cmp(&a.last),
-        SortKey::Spent => b
-            .spent
-            .partial_cmp(&a.spent)
-            .unwrap_or(std::cmp::Ordering::Equal),
-        SortKey::Frequency => freq_days(a)
-            .partial_cmp(&freq_days(b))
-            .unwrap_or(std::cmp::Ordering::Equal),
-        SortKey::Likely => b.likely.cmp(&a.likely),
-        SortKey::Times => b.times.cmp(&a.times),
-        SortKey::Name => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+    products.sort_by(|a, b| {
+        let ordering = match sort {
+            SortKey::Spent => a
+                .spent
+                .partial_cmp(&b.spent)
+                .unwrap_or(std::cmp::Ordering::Equal),
+            SortKey::Qty => a
+                .qty
+                .partial_cmp(&b.qty)
+                .unwrap_or(std::cmp::Ordering::Equal),
+            SortKey::Frequency => freq_days(b)
+                .partial_cmp(&freq_days(a))
+                .unwrap_or(std::cmp::Ordering::Equal),
+            SortKey::Likely => a.likely.cmp(&b.likely),
+            SortKey::Times => a.times.cmp(&b.times),
+            SortKey::Name => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+        };
+        if desc {
+            ordering.reverse()
+        } else {
+            ordering
+        }
     });
     products
 }
@@ -2624,8 +2711,24 @@ fn kpi(value: &str, caption: &str) -> gtk::Box {
     box_
 }
 
-fn sort_header(shell: &Rc<RefCell<Shell>>, text: &str, key: SortKey, width: i32) -> gtk::Button {
-    let button = gtk::Button::with_label(text);
+fn sort_header(
+    shell: &Rc<RefCell<Shell>>,
+    text: &str,
+    key: SortKey,
+    width: i32,
+    end: bool,
+) -> gtk::Button {
+    let state = shell.borrow();
+    let caption = if state.sort == key {
+        format!("{text} {}", if state.sort_desc { "↓" } else { "↑" })
+    } else {
+        text.to_string()
+    };
+    drop(state);
+    let label = gtk::Label::new(Some(&caption));
+    label.set_xalign(if end { 1.0 } else { 0.0 });
+    let button = gtk::Button::new();
+    button.set_child(Some(&label));
     button.add_css_class("bf-th");
     if shell.borrow().sort == key {
         button.add_css_class("on");
@@ -2633,10 +2736,38 @@ fn sort_header(shell: &Rc<RefCell<Shell>>, text: &str, key: SortKey, width: i32)
     if width > 0 {
         button.set_width_request(width);
     }
-    button.set_halign(gtk::Align::Start);
+    button.set_halign(if end {
+        gtk::Align::End
+    } else {
+        gtk::Align::Start
+    });
     let shell_click = shell.clone();
     button.connect_clicked(move |_| {
-        shell_click.borrow_mut().sort = key;
+        let mut state = shell_click.borrow_mut();
+        if state.sort == key {
+            state.sort_desc = !state.sort_desc;
+        } else {
+            state.sort = key;
+            state.sort_desc = key != SortKey::Name;
+        }
+        drop(state);
+        schedule(&shell_click);
+    });
+    button
+}
+
+fn shortage_header(shell: &Rc<RefCell<Shell>>) -> gtk::Button {
+    let on = shell.borrow().shortage;
+    let button = gtk::Button::with_label(if on { "Shortage ↓" } else { "Shortage" });
+    button.add_css_class("bf-th");
+    if on {
+        button.add_css_class("on");
+    }
+    let shell_click = shell.clone();
+    button.connect_clicked(move |_| {
+        let mut state = shell_click.borrow_mut();
+        state.shortage = !state.shortage;
+        drop(state);
         schedule(&shell_click);
     });
     button
@@ -2749,18 +2880,6 @@ fn store_label(id: StoreId) -> &'static str {
     }
 }
 
-fn store_chip_label(id: StoreId) -> &'static str {
-    match id {
-        StoreId::Carrefour => "Carrefour",
-        StoreId::UnionCoop => "Union",
-        StoreId::Grandiose => "Grandiose",
-        StoreId::Waitrose => "Waitrose",
-        StoreId::Spinneys => "Spinneys",
-        StoreId::Mmi => "MMI",
-        StoreId::AfricanEastern => "African",
-    }
-}
-
 fn startup_query() -> String {
     std::env::var("OMABRING_QUERY")
         .unwrap_or_default()
@@ -2823,7 +2942,18 @@ fn logo_class(id: StoreId) -> &'static str {
 }
 
 fn initial_page() -> Page {
-    page_from(std::env::var("OMABRING_PAGE").ok().as_deref())
+    let product = std::env::var("OMABRING_PRODUCT").ok();
+    startup_page(
+        std::env::var("OMABRING_PAGE").ok().as_deref(),
+        product.as_deref(),
+    )
+}
+
+fn startup_page(page: Option<&str>, product: Option<&str>) -> Page {
+    if let Some(name) = product.map(str::trim).filter(|name| !name.is_empty()) {
+        return Page::Product(name.to_string());
+    }
+    page_from(page)
 }
 
 fn seed_demo(core: &App) {
@@ -2859,11 +2989,26 @@ fn seed_demo(core: &App) {
         let _ = core.import_document(&document);
     }
     for (name, bytes) in [
-        ("Milk", include_bytes!("../../../assets/demo/milk.png").as_slice()),
-        ("Bread", include_bytes!("../../../assets/demo/bread.png").as_slice()),
-        ("Eggs", include_bytes!("../../../assets/demo/eggs.png").as_slice()),
-        ("Water", include_bytes!("../../../assets/demo/water.png").as_slice()),
-        ("Rice", include_bytes!("../../../assets/demo/rice.png").as_slice()),
+        (
+            "Milk",
+            include_bytes!("../../../assets/demo/milk.png").as_slice(),
+        ),
+        (
+            "Bread",
+            include_bytes!("../../../assets/demo/bread.png").as_slice(),
+        ),
+        (
+            "Eggs",
+            include_bytes!("../../../assets/demo/eggs.png").as_slice(),
+        ),
+        (
+            "Water",
+            include_bytes!("../../../assets/demo/water.png").as_slice(),
+        ),
+        (
+            "Rice",
+            include_bytes!("../../../assets/demo/rice.png").as_slice(),
+        ),
         (
             "Coffee",
             include_bytes!("../../../assets/demo/coffee.png").as_slice(),
@@ -2919,8 +3064,130 @@ fn poll_consent(shell: &Rc<RefCell<Shell>>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{alt_index, nav_slot, page_at, page_from, Page};
-    use omabring_core::StoreId;
+    use super::{
+        alt_index, chart_buckets, nav_slot, page_at, page_from, products_from, startup_page,
+        ChartKind, Page, SortKey,
+    };
+    use omabring_core::{InvoiceLine, InvoiceSummary, StoreId};
+    use std::collections::HashMap;
+
+    #[test]
+    fn product_deep_link_opens_that_product() {
+        assert!(matches!(startup_page(None, None), Page::Dashboard));
+        assert!(matches!(
+            startup_page(Some("purchases"), Some("  ")),
+            Page::Purchases
+        ));
+        assert!(matches!(
+            startup_page(Some("dashboard"), Some(" Full Fat Milk ")),
+            Page::Product(name) if name == "Full Fat Milk"
+        ));
+    }
+
+    #[test]
+    fn column_sort_flips_direction() {
+        let invoices = vec![
+            sample_invoice(1, "2026-01-01", "Milk", 1.0, 8.0),
+            sample_invoice(2, "2026-02-01", "Milk", 2.0, 9.0),
+            sample_invoice(3, "2026-02-02", "Bread", 1.0, 4.0),
+        ];
+        let refs: Vec<&InvoiceSummary> = invoices.iter().collect();
+        let likely = HashMap::new();
+        let spent = products_from(&refs, &likely, SortKey::Spent, true);
+        assert_eq!(spent[0].name, "Milk");
+        let spent_asc = products_from(&refs, &likely, SortKey::Spent, false);
+        assert_eq!(spent_asc[0].name, "Bread");
+        let times = products_from(&refs, &likely, SortKey::Times, true);
+        assert_eq!(times[0].name, "Milk");
+        let units = products_from(&refs, &likely, SortKey::Qty, true);
+        assert_eq!(units[0].name, "Milk");
+        assert!((units[0].qty - 3.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn product_charts_cover_price_qty_spend_and_total() {
+        use chrono::NaiveDate;
+        use omabring_core::{ProductHistory, PurchasePoint, StorePrice};
+        let item = ProductHistory {
+            name: "Milk".into(),
+            times: 2,
+            spent: 26.5,
+            avg: 8.75,
+            min: 8.5,
+            max: 9.0,
+            first: "2024-01-15".into(),
+            last: "2025-06-02".into(),
+            frequency: "every 500 days".into(),
+            likely: 40,
+            next: String::new(),
+            points: vec![
+                PurchasePoint {
+                    date: NaiveDate::from_ymd_opt(2024, 1, 15).unwrap(),
+                    store: StoreId::Carrefour,
+                    qty: 1.0,
+                    unit_price: 8.5,
+                    invoice_id: 1,
+                    invoice_no: "A".into(),
+                },
+                PurchasePoint {
+                    date: NaiveDate::from_ymd_opt(2025, 6, 2).unwrap(),
+                    store: StoreId::UnionCoop,
+                    qty: 2.0,
+                    unit_price: 9.0,
+                    invoice_id: 2,
+                    invoice_no: "B".into(),
+                },
+            ],
+            by_store: vec![
+                StorePrice {
+                    store: StoreId::Carrefour,
+                    last: 8.5,
+                    min: 8.5,
+                    max: 8.5,
+                    buys: 1,
+                },
+                StorePrice {
+                    store: StoreId::UnionCoop,
+                    last: 9.0,
+                    min: 9.0,
+                    max: 9.0,
+                    buys: 1,
+                },
+            ],
+        };
+        let price = chart_buckets(ChartKind::Price, &item);
+        assert_eq!(price.len(), 2);
+        assert!((price[0].1 - 8.5).abs() < 0.01);
+        let qty = chart_buckets(ChartKind::QtyMonth, &item);
+        assert!((qty[1].1 - 2.0).abs() < 0.01);
+        let spend = chart_buckets(ChartKind::SpendMonth, &item);
+        assert!((spend[1].1 - 18.0).abs() < 0.01);
+        assert_eq!(chart_buckets(ChartKind::SpendYear, &item).len(), 2);
+        let total = chart_buckets(ChartKind::Cumulative, &item);
+        assert!((total[1].1 - 26.5).abs() < 0.01);
+        let compare = chart_buckets(ChartKind::StoreCompare, &item);
+        assert_eq!(compare.len(), 2);
+        assert!((compare[0].1 - 8.5).abs() < 0.01);
+    }
+
+    fn sample_invoice(id: i64, date: &str, name: &str, qty: f64, price: f64) -> InvoiceSummary {
+        InvoiceSummary {
+            id,
+            store: StoreId::Carrefour,
+            invoice_no: id.to_string(),
+            purchased_on: date.into(),
+            currency: "AED".into(),
+            total: qty * price,
+            lines: vec![InvoiceLine {
+                name: name.into(),
+                qty,
+                unit: "piece".into(),
+                unit_price: price,
+                line_total: qty * price,
+                product_key: String::new(),
+            }],
+        }
+    }
 
     #[test]
     fn window_opens_on_dashboard() {

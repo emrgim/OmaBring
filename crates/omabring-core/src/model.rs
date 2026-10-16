@@ -144,6 +144,9 @@ pub struct Offer {
     pub currency: String,
     pub unit: String,
     pub source: OfferSource,
+    /// Catalog picture for this offer. Empty when the store search had none.
+    #[serde(default)]
+    pub image_url: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

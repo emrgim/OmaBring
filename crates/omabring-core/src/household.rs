@@ -31,6 +31,13 @@ pub struct StorePrice {
     pub buys: u32,
 }
 
+/// A receipt product that still has no picture on this machine.
+#[derive(Debug, Clone)]
+pub struct MissingImage {
+    pub name: String,
+    pub store: StoreId,
+}
+
 #[derive(Debug, Clone)]
 pub struct ProductHistory {
     pub name: String,
@@ -171,6 +178,46 @@ impl App {
         Ok(path)
     }
 
+    /// Receipt names with no saved picture, and the store that sold them.
+    pub fn products_missing_images(&self) -> Result<Vec<MissingImage>> {
+        self.with_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT MIN(l.name), MIN(i.store)
+                 FROM invoice_lines l
+                 JOIN invoices i ON i.id = l.invoice_id
+                 WHERE NOT EXISTS (
+                   SELECT 1 FROM product_images p WHERE p.name_key = l.name_key
+                 )
+                 GROUP BY l.name_key
+                 ORDER BY MIN(l.name)",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?;
+            let mut out = Vec::new();
+            for row in rows {
+                let (name, store) = row?;
+                let Some(store) = StoreId::parse(&store) else {
+                    continue;
+                };
+                out.push(MissingImage { name, store });
+            }
+            Ok(out)
+        })
+    }
+
+    /// Downloads one catalog picture and stores it next to the other product images.
+    pub fn cache_remote_image(&self, name: &str, url: &str) -> Result<bool> {
+        if self.product_image(name).is_some() {
+            return Ok(true);
+        }
+        let Some(bytes) = fetch_image(url) else {
+            return Ok(false);
+        };
+        self.store_product_image(name, &bytes)?;
+        Ok(true)
+    }
+
     pub fn product_history(&self, name: &str) -> Result<ProductHistory> {
         let wanted = canonical_key(self, name);
         let invoices = self.list_invoices()?;
@@ -187,7 +234,9 @@ impl App {
                     canonical_stored(self, &line.product_key)
                 };
                 let name_key = normalize_name(&line.name);
-                if key != wanted && name_key != wanted && canonical_stored(self, &name_key) != wanted
+                if key != wanted
+                    && name_key != wanted
+                    && canonical_stored(self, &name_key) != wanted
                 {
                     continue;
                 }
@@ -252,7 +301,11 @@ impl App {
             times: points.len() as u32,
             spent,
             avg,
-            min: if prices.is_empty() { 0.0 } else { round_money(min) },
+            min: if prices.is_empty() {
+                0.0
+            } else {
+                round_money(min)
+            },
             max: round_money(max),
             first,
             last,
@@ -418,10 +471,7 @@ pub(crate) fn fetch_image(url: &str) -> Option<Vec<u8>> {
         return None;
     }
     let mut bytes = Vec::new();
-    response
-        .take(2_000_000)
-        .read_to_end(&mut bytes)
-        .ok()?;
+    response.take(2_000_000).read_to_end(&mut bytes).ok()?;
     image_ext(&bytes).map(|_| bytes)
 }
 
@@ -447,6 +497,11 @@ mod tests {
         let png = include_bytes!("../../../assets/demo/milk.png");
         app.store_product_image("Milk", png).unwrap();
         assert!(app.product_image("Milk").unwrap().is_file());
+        let missing = app.products_missing_images().unwrap();
+        assert!(missing.iter().all(|item| item.name != "Milk"));
+        assert!(app
+            .cache_remote_image("Milk", "https://example.invalid/milk.png")
+            .unwrap());
         let folder = dir.path().join("backups");
         app.set_backup_dir(&folder).unwrap();
         let when = app.backup_now().unwrap();

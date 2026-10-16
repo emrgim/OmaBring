@@ -15,9 +15,9 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use rusqlite::{params, Connection};
 
 pub use bringfast::{BringfastImport, ImportReport};
-pub use household::{default_backup_dir, ProductHistory, PurchasePoint, StorePrice};
 pub use crypto::pkce_s256;
 pub use error::{Error, Result};
+pub use household::{default_backup_dir, MissingImage, ProductHistory, PurchasePoint, StorePrice};
 pub use model::*;
 pub use theme::{
     active_stylesheet, load_active_palette, load_palette_path, load_palette_str, load_window_theme,

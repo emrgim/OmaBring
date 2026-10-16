@@ -182,6 +182,7 @@ pub(crate) fn offers_from_carrefour(body: &str) -> Result<Vec<Offer>, BackendErr
             data.get("currency")
                 .and_then(Value::as_str)
                 .unwrap_or("AED"),
+            first_image(&data),
         ));
         if offers.len() == 8 {
             break;
@@ -194,7 +195,7 @@ fn search_grandiose(query: &str) -> Result<Vec<Offer>, BackendError> {
     let body = graphql(
         "https://www.grandiose.ae/graphql",
         "",
-        r#"query Search($q: String!, $n: Int!) { products(search: $q, pageSize: $n) { items { sku name price_range { minimum_price { regular_price { value currency } } } } } }"#,
+        r#"query Search($q: String!, $n: Int!) { products(search: $q, pageSize: $n) { items { sku name small_image { url } thumbnail { url } price_range { minimum_price { regular_price { value currency } } } } } }"#,
         json!({"q": query, "n": 20}),
         "Grandiose",
     )?;
@@ -208,7 +209,7 @@ fn search_african(query: &str) -> Result<Vec<Offer>, BackendError> {
     let body = graphql(
         "https://www.africaneasternonline.com/graphql",
         "",
-        r#"query ($q: String!, $n: Int!) { products(search: $q, pageSize: $n) { items { sku name price_range { minimum_price { regular_price { value currency } } } } } }"#,
+        r#"query ($q: String!, $n: Int!) { products(search: $q, pageSize: $n) { items { sku name small_image { url } thumbnail { url } price_range { minimum_price { regular_price { value currency } } } } } }"#,
         json!({"q": query, "n": 20}),
         "African & Eastern",
     )?;
@@ -257,7 +258,14 @@ pub(crate) fn offers_from_magento_products(
             .map(id_string)
             .filter(|id| !id.is_empty())
             .unwrap_or_else(|| name.clone());
-        offers.push(live_offer(store, product_id, name, price, currency));
+        offers.push(live_offer(
+            store,
+            product_id,
+            name,
+            price,
+            currency,
+            first_image(&item),
+        ));
     }
     Ok(offers)
 }
@@ -315,7 +323,22 @@ pub(crate) fn offers_from_mmi(body: &str) -> Result<Vec<Offer>, BackendError> {
             .map(id_string)
             .filter(|id| !id.is_empty())
             .unwrap_or_else(|| name.clone());
-        offers.push(live_offer(StoreId::Mmi, product_id, name, price, "AED"));
+        let image = {
+            let from_product = first_image(&product);
+            if from_product.is_empty() {
+                first_image(&hit)
+            } else {
+                from_product
+            }
+        };
+        offers.push(live_offer(
+            StoreId::Mmi,
+            product_id,
+            name,
+            price,
+            "AED",
+            image,
+        ));
         if offers.len() == 8 {
             break;
         }
@@ -409,6 +432,7 @@ pub(crate) fn offers_from_algolia(body: &str) -> Result<Vec<Offer>, BackendError
             name,
             price,
             "AED",
+            first_image(&hit),
         ));
     }
     Ok(offers)
@@ -430,18 +454,23 @@ pub(crate) fn offers_from_html(
     origin: &str,
     href_prefix: &str,
 ) -> Vec<Offer> {
-    let _ = origin;
-    let mut offers = offers_from_split(store, html, href_prefix, "data-product-id=\"");
+    let mut offers = offers_from_split(store, html, origin, href_prefix, "data-product-id=\"");
     if offers.is_empty() {
-        offers = offers_from_split(store, html, href_prefix, "js-product-wrapper");
+        offers = offers_from_split(store, html, origin, href_prefix, "js-product-wrapper");
     }
     if offers.is_empty() {
-        offers = offers_from_split(store, html, href_prefix, "product-name");
+        offers = offers_from_split(store, html, origin, href_prefix, "product-name");
     }
     offers
 }
 
-fn offers_from_split(store: StoreId, html: &str, href_prefix: &str, marker: &str) -> Vec<Offer> {
+fn offers_from_split(
+    store: StoreId,
+    html: &str,
+    origin: &str,
+    href_prefix: &str,
+    marker: &str,
+) -> Vec<Offer> {
     let mut offers = Vec::new();
     let mut seen = Vec::new();
     for block in html.split(marker).skip(1) {
@@ -471,7 +500,14 @@ fn offers_from_split(store: StoreId, html: &str, href_prefix: &str, marker: &str
         } else {
             product_id
         };
-        offers.push(live_offer(store, id, name, price, "AED"));
+        offers.push(live_offer(
+            store,
+            id,
+            name,
+            price,
+            "AED",
+            html_image(block, origin),
+        ));
         if offers.len() == 8 {
             break;
         }
@@ -1008,6 +1044,7 @@ fn live_offer(
     name: String,
     price: f64,
     currency: &str,
+    image_url: impl Into<String>,
 ) -> Offer {
     let unit = pack_unit(&name);
     Offer {
@@ -1018,7 +1055,152 @@ fn live_offer(
         currency: currency.to_uppercase(),
         unit,
         source: OfferSource::Live,
+        image_url: image_url.into(),
     }
+}
+
+/// Best catalog picture for a receipt name. The picture has to belong to a
+/// name that contains the query, so a snack that merely shares one word is skipped.
+pub fn product_image(store: StoreId, query: &str) -> Result<Option<String>, BackendError> {
+    let offers = search(store, query)?;
+    Ok(pick_image(query, &offers))
+}
+
+pub(crate) fn pick_image(query: &str, offers: &[Offer]) -> Option<String> {
+    let mut ranked = offers.to_vec();
+    rank_offers(query, &mut ranked);
+    ranked.into_iter().find_map(|offer| {
+        if !image_name_ok(query, &offer.name) {
+            return None;
+        }
+        let url = offer.image_url.trim();
+        if url.is_empty() {
+            None
+        } else {
+            Some(url.to_string())
+        }
+    })
+}
+
+fn image_name_ok(query: &str, name: &str) -> bool {
+    let query_tokens = significant_tokens(query);
+    let name_tokens = significant_tokens(name);
+    if query_tokens.is_empty() || name_tokens.is_empty() {
+        return false;
+    }
+    if !query_tokens
+        .iter()
+        .all(|token| name_tokens.iter().any(|word| word == token))
+    {
+        return false;
+    }
+    let query_is_snack = query_tokens.iter().any(|token| snack_token(token));
+    if !query_is_snack && name_tokens.iter().any(|token| snack_token(token)) {
+        return false;
+    }
+    true
+}
+
+fn snack_token(token: &str) -> bool {
+    matches!(
+        token,
+        "oreo"
+            | "cookie"
+            | "cookies"
+            | "chocolate"
+            | "biscuit"
+            | "biscuits"
+            | "candy"
+            | "wafer"
+            | "wafers"
+            | "cake"
+            | "cakes"
+            | "cocoa"
+            | "doughnut"
+            | "donut"
+    )
+}
+
+fn first_image(value: &Value) -> String {
+    const KEYS: &[&str] = &[
+        "image_url",
+        "imageUrl",
+        "image",
+        "thumbnail",
+        "thumbnail_url",
+        "small_image",
+        "smallImage",
+        "media_url",
+    ];
+    for key in KEYS {
+        if let Some(child) = value.get(*key) {
+            let url = http_url(child);
+            if !url.is_empty() {
+                return url;
+            }
+            if let Some(items) = child.as_array() {
+                for item in items {
+                    let url = http_url(item);
+                    if !url.is_empty() {
+                        return url;
+                    }
+                }
+            }
+        }
+    }
+    String::new()
+}
+
+fn http_url(value: &Value) -> String {
+    if let Some(url) = value.as_str() {
+        if url.starts_with("http://") || url.starts_with("https://") {
+            return url.to_string();
+        }
+    }
+    if let Some(url) = value.get("url").and_then(Value::as_str) {
+        if url.starts_with("http://") || url.starts_with("https://") {
+            return url.to_string();
+        }
+    }
+    String::new()
+}
+
+fn html_image(block: &str, origin: &str) -> String {
+    let mut rest = block;
+    while let Some(at) = rest.find("<img") {
+        let tag = &rest[at..];
+        let end = tag.find('>').unwrap_or(tag.len());
+        let tag = &tag[..end];
+        for attr in ["src", "data-src"] {
+            let key = format!("{attr}=");
+            if let Some(pos) = tag.find(&key) {
+                if let Some((src, _)) = read_attr(&tag[pos..], attr) {
+                    if let Some(url) = absolute_image(src.trim(), origin) {
+                        return url;
+                    }
+                }
+            }
+        }
+        rest = &rest[at + 4..];
+    }
+    String::new()
+}
+
+fn absolute_image(src: &str, origin: &str) -> Option<String> {
+    let lower = src.to_ascii_lowercase();
+    if lower.starts_with("data:") || lower.contains("logo") || lower.ends_with(".svg") {
+        return None;
+    }
+    if lower.starts_with("http://") || lower.starts_with("https://") {
+        return Some(src.to_string());
+    }
+    if let Some(rest) = src.strip_prefix("//") {
+        return Some(format!("https://{rest}"));
+    }
+    if src.starts_with('/') {
+        return Some(format!("{origin}{src}"));
+    }
+    None
 }
 
 /// Token overlap used by Bring Fast `_score_name`. A token has to be longer
@@ -1393,6 +1575,7 @@ mod tests {
                 "Oreo Cookies Milk".into(),
                 1.65,
                 "AED",
+                "https://cdn.example/oreo.jpg",
             ),
             live_offer(
                 StoreId::Grandiose,
@@ -1400,6 +1583,7 @@ mod tests {
                 "Galaxy Chocolate".into(),
                 8.0,
                 "AED",
+                "",
             ),
             live_offer(
                 StoreId::Grandiose,
@@ -1407,6 +1591,7 @@ mod tests {
                 "Almarai Full Fat Fresh Milk 2L".into(),
                 12.49,
                 "AED",
+                "https://cdn.example/milk.jpg",
             ),
         ];
         rank_offers("milk", &mut offers);
@@ -1426,5 +1611,50 @@ mod tests {
         assert_eq!(pack_unit("Oasis Blu 1L Pack of 6"), "1 L");
         assert_eq!(pack_unit("Still water pack of 6"), "pack");
         assert_eq!(pack_unit("White bread"), "piece");
+    }
+
+    #[test]
+    fn catalog_image_follows_the_matching_product() {
+        let body = r#"{"response":{"results":[{"value":"Almarai Milk","data":{"id":"1","price":12.5,"currency":"AED","image_url":"https://cdn.example/milk.jpg"}}]}}"#;
+        let offers = offers_from_carrefour(body).unwrap();
+        assert_eq!(offers[0].image_url, "https://cdn.example/milk.jpg");
+        let html = r#"<div data-product-id="335">
+  <img src="/media/aptamil.jpg" alt="Aptamil">
+  <span class="price">12.00</span>
+  <a href="/en-ae/catalogue/milupa-aptamil-growing-up-toddler-milk-stage-3-200ml_335/">Aptamil Growing Up Milk Formula 1-3 Years 200ml</a>
+</div>"#;
+        let offers = offers_from_html(
+            StoreId::Spinneys,
+            html,
+            "https://www.spinneys.com",
+            "/en-ae/catalogue/",
+        );
+        assert_eq!(
+            offers[0].image_url,
+            "https://www.spinneys.com/media/aptamil.jpg"
+        );
+        let ranked = vec![
+            live_offer(
+                StoreId::Carrefour,
+                "1".into(),
+                "Oreo Cookies Milk".into(),
+                1.0,
+                "AED",
+                "https://cdn.example/oreo.jpg",
+            ),
+            live_offer(
+                StoreId::Carrefour,
+                "2".into(),
+                "Almarai Full Fat Fresh Milk 2L".into(),
+                12.0,
+                "AED",
+                "https://cdn.example/milk.jpg",
+            ),
+        ];
+        assert_eq!(
+            pick_image("Almarai Full Fat Fresh Milk", &ranked).as_deref(),
+            Some("https://cdn.example/milk.jpg")
+        );
+        assert!(pick_image("milk", &ranked[..1]).is_none());
     }
 }

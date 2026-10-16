@@ -546,6 +546,7 @@ impl App {
                         currency: currency.clone(),
                         unit: line.unit,
                         source: OfferSource::History,
+                        image_url: String::new(),
                     });
                 }
             }
@@ -801,10 +802,16 @@ fn parse_csv_invoices(text: &str) -> Result<Vec<DraftInvoice>> {
         idx("store").ok_or_else(|| Error::InvalidInvoice("csv needs a store column".into()))?;
     let no_i = idx("invoice_no")
         .ok_or_else(|| Error::InvalidInvoice("csv needs an invoice_no column".into()))?;
-    let date_i = ["date", "datetime", "purchased_at", "purchased_on", "invoice_date"]
-        .into_iter()
-        .find_map(idx)
-        .ok_or_else(|| Error::InvalidInvoice("csv needs a date column".into()))?;
+    let date_i = [
+        "date",
+        "datetime",
+        "purchased_at",
+        "purchased_on",
+        "invoice_date",
+    ]
+    .into_iter()
+    .find_map(idx)
+    .ok_or_else(|| Error::InvalidInvoice("csv needs a date column".into()))?;
     let name_i =
         idx("name").ok_or_else(|| Error::InvalidInvoice("csv needs a name column".into()))?;
     let qty_i = idx("qty").ok_or_else(|| Error::InvalidInvoice("csv needs a qty column".into()))?;
@@ -1194,6 +1201,7 @@ waitrose,W-1,2026-03-02,AED,Oat Milk,1,piece,11\n";
                 currency: "AED".into(),
                 unit: "piece".into(),
                 source: OfferSource::Live,
+                image_url: String::new(),
             }],
         };
         let comparison = app.search("oat milk", &backend).unwrap();
