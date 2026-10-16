@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "emrgim.omabring",
+  "name": "OmaBring",
+  "version": "0.1.0",
+  "author": "emrgim",
+  "license": "MIT",
+  "description": "UAE grocery shopping on Omarchy. The bar widget opens the OmaBring app.",
+  "kinds": ["bar-widget"],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "OmaBring",
+    "category": "Shopping",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

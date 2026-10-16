@@ -1,0 +1,14 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=OmaBring
+GenericName=Grocery
+Comment=Search, compare, and shop across UAE stores
+Exec=omabring
+Icon=omabring
+Terminal=false
+Categories=Utility;
+Keywords=grocery;shopping;receipts;cart;
+StartupNotify=true
+StartupWMClass=omabring
+DBusActivatable=false

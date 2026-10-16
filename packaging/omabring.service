@@ -1,0 +1,13 @@
+[Unit]
+Description=OmaBring local service
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/omabring-service
+Restart=on-failure
+RestartSec=2
+Environment=OMABRING_BIND=127.0.0.1:8787
+
+[Install]
+WantedBy=default.target

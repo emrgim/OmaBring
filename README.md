@@ -1,2 +1,124 @@
-# omi-bring
-Omi Bring: Rust port of Bring Fast as a SuperOmi/Omarchy plugin (UAE grocery MCP + dashboard)
+# OmaBring
+
+OmaBring is a native desktop app for [Omarchy](https://omarchy.org) (Arch Linux and Hyprland). It is a UAE grocery shopper: sign in, link store accounts, search and compare prices, keep carts, prepare checkout, import receipts, and see spending plus what to buy again.
+
+The window is GTK 4 and libadwaita. It follows the active Omarchy theme and runs as a Wayland application. A background service on this machine exposes the same features to an approved client over MCP, with OAuth.
+
+## Features
+
+- A local account, with the password stored as a hash.
+- Store sign-ins for Carrefour, Union Coop, Grandiose, Spinneys, Waitrose, MMI, and African & Eastern. Usernames and passwords are encrypted with a machine key in the data directory (`0600`).
+- Product search and price comparison across linked stores and imported receipts.
+- A cart for every store, and checkout that prepares the cart. Payment stays on the store website.
+- Receipt import from JSON or CSV, with spending totals for this month, last month, and the last 7, 30, or 365 days.
+- A rebuy forecast from repeat purchases: next date, status, and a likelihood score. One-off buys and items quiet for more than 90 days are left off the list.
+
+## Omarchy
+
+The app reads the active theme from `~/.config/omarchy/current/theme/colors.toml`, and from `~/.local/state/omarchy/current/theme/colors.toml` when the first path is not present. `OMABRING_THEME` can point at a theme directory or a `colors.toml` file.
+
+`install.sh` builds the release binaries, installs a launcher entry so OmaBring shows up in the Omarchy launcher, installs a systemd user service, and copies the bar plugin into `~/.config/omarchy/plugins/emrgim.omabring`.
+
+The plugin id is `emrgim.omabring`. Left-click the bar widget to open the app. Right-click opens a short panel with the same action. From a git checkout, Omarchy can also add it directly:
+
+```sh
+omarchy plugin add https://github.com/emrgim/OmaBring.git --enable
+```
+
+## Install
+
+Runtime libraries on Arch: `gtk4` and `libadwaita`. Building also needs those development files, a C compiler, and Rust.
+
+```sh
+./install.sh
+```
+
+The app binary is `~/.local/bin/omabring`. The service binary is `~/.local/bin/omabring-service`. Data lives in `~/.local/share/omabring` (override with `OMABRING_DATA_DIR`). The service listens on `127.0.0.1:8787` (override with `OMABRING_BIND`).
+
+Sign in inside the OmaBring window before approving a client. The window asks for that approval. The service does not open a browser page.
+
+## Local service and OAuth
+
+The service speaks MCP at `POST /mcp` and OAuth on the same address.
+
+- `GET /.well-known/oauth-authorization-server`
+- `GET /.well-known/oauth-protected-resource`
+- `POST /oauth/register` — dynamic client registration
+- `GET /oauth/authorize` — authorization code with PKCE (`S256` only). The request waits until OmaBring allows or denies it.
+- `POST /oauth/token` — `authorization_code` and `refresh_token`. Refresh tokens rotate.
+- `POST /oauth/revoke`
+
+Redirect addresses must be `https`, `omabring://`, or loopback `http`. Public clients use `token_endpoint_auth_method=none` together with PKCE. Confidential clients can use `client_secret_post` or `client_secret_basic`.
+
+MCP tools: `whoami`, `list_stores`, `link_store`, `unlink_store`, `search`, `compare`, `cart_list`, `cart_add`, `cart_update`, `cart_remove`, `cart_clear`, `checkout`, `import_invoice`, `list_invoices`, `spend`, `forecast`.
+
+## Store contract
+
+Each store is an adapter behind one interface: search, and checkout when that store can take a remote cart.
+
+Live calls run only when the saved account has a contract address (`base_url`). That address must be `https`, or loopback `http`. The adapter then calls:
+
+| Call | Request | Success body |
+| --- | --- | --- |
+| Search | `GET {base}/omabring/search?q=` | `{"products":[{"id","name","price","currency","unit"}]}` |
+| Checkout | `POST {base}/omabring/checkout` with `{"store","lines"}` | `{"status":"ready","url","reference"}` |
+
+`status` may also be `prepared` or `accepted`.
+
+Carrefour, Union Coop, and Grandiose can push that checkout. Spinneys, Waitrose, MMI, and African & Eastern keep the cart locally; checkout opens the store website and does not submit a remote cart. MMI and African & Eastern are search-and-list stores in OmaBring.
+
+If a contract address is missing, or the endpoint does not answer in that shape, search still uses imported receipts and the local cart still works. The public storefronts are not assumed to implement this contract. Point `base_url` at an endpoint that does when you have one.
+
+Default websites, used when checkout stays on the store:
+
+- Carrefour — https://www.carrefouruae.com/mafuae/en
+- Union Coop — https://www.unioncoop.ae/
+- Grandiose — https://www.grandiose.ae/
+- Spinneys — https://www.spinneys.com/en-ae/
+- Waitrose — https://www.waitrose.ae/en/
+- MMI — https://www.mmihomedelivery.ae/
+- African & Eastern — https://www.africanandeastern.com/
+
+## Receipt formats
+
+JSON:
+
+```json
+{
+  "store": "carrefour",
+  "invoice_no": "1001",
+  "date": "2026-03-01",
+  "currency": "AED",
+  "items": [
+    {"name": "Milk", "qty": 1, "unit": "piece", "unit_price": 5.25}
+  ]
+}
+```
+
+A document may also be `{"invoices":[ ... ]}` or a JSON array. Importing the same store and `invoice_no` again replaces that receipt.
+
+CSV header: `store,invoice_no,date,currency,name,qty,unit,unit_price`.
+
+Store names accept the labels above (`union coop`, `african & eastern`, and the snake-case ids).
+
+## Develop
+
+```sh
+cargo test --workspace
+cargo build --release
+```
+
+`omabring --version` prints the version. `omabring --print-theme` prints the CSS taken from the active Omarchy theme. `omabring --smoke` opens the window and closes it, for a display check.
+
+## Layout
+
+| Path | Role |
+| --- | --- |
+| `crates/omabring` | GTK 4 window |
+| `crates/omabring-service` | Background MCP and OAuth service |
+| `crates/omabring-core` | Accounts, encryption, carts, receipts, spending, forecasts, theme colors |
+| `crates/omabring-stores` | Store adapter interface and the seven stores |
+| `crates/omabring-mcp` | HTTP MCP and OAuth |
+| `manifest.json`, `BarWidget.qml`, `Panel.qml` | Omarchy bar plugin `emrgim.omabring` |
+| `packaging/` | Launcher entry and systemd user unit |
+| `install.sh` | Build and install onto the machine |
