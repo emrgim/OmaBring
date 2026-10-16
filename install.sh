@@ -39,16 +39,10 @@ if command -v systemctl >/dev/null 2>&1; then
   systemctl --user enable --now omabring.service || true
 fi
 
-PLUGIN_DIR="${HOME}/.config/omarchy/plugins/emrgim.omabring"
-mkdir -p "${PLUGIN_DIR}"
-install -m 0644 "${ROOT}/manifest.json" "${PLUGIN_DIR}/manifest.json"
-install -m 0644 "${ROOT}/BarWidget.qml" "${PLUGIN_DIR}/BarWidget.qml"
-install -m 0644 "${ROOT}/Panel.qml" "${PLUGIN_DIR}/Panel.qml"
-install -m 0644 "${ROOT}/LICENSE" "${PLUGIN_DIR}/LICENSE"
+# OmaBring is not an Omarchy bar plugin. Drop a copy left by an older install.
+rm -rf "${HOME}/.config/omarchy/plugins/emrgim.omabring"
 
 echo "OmaBring is installed."
 echo "App: ${BIN_DIR}/omabring"
 echo "Service: ${BIN_DIR}/omabring-service"
 echo "Launcher entry: ${DESKTOP}"
-echo "Enable the bar widget with: omarchy plugin add ${ROOT} --enable"
-echo "Or, from the published repository: omarchy plugin add https://github.com/emrgim/OmaBring.git --enable"

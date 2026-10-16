@@ -508,7 +508,7 @@ impl App {
             "Cart prepared on this machine. Payment stays on the store website.".to_string()
         } else {
             format!(
-                "Local cart prepared. {} does not take a remote cart from OmaBring; open the store to pay.",
+                "Local cart prepared. {} does not take a remote cart from OmaBring. Payment stays with the store.",
                 store.name()
             )
         };

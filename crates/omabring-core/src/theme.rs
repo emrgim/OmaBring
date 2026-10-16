@@ -44,58 +44,36 @@ impl Palette {
 
     /// Stylesheet for the active palette.
     ///
-    /// Values are literal hex custom properties. Libadwaita derives
-    /// `accent_color` with `oklab(from accent_bg_color)` and publishes the
-    /// same names as CSS variables (`--accent-bg-color: @accent_bg_color`,
-    /// and the same for window, destructive, success, warning, and error).
-    /// Redefining those names with `@define-color` makes that resolution
-    /// recurse until the main thread overflows. Hex variables do not point
-    /// back at the named colors.
+    /// Colors live only under app-specific names (`--omabring-bg` and the
+    /// rest) and are referenced from OmaBring selectors. Libadwaita names
+    /// (`--window-bg-color`, `--accent-color`, and the other surface and
+    /// accent variables) are not set, and there is no `@define-color` and no
+    /// `:root` block. On GTK 4.22 with libadwaita 1.9, overriding those names
+    /// makes style resolution recurse inside `gtk_widget_show` until the main
+    /// thread overflows.
     pub fn to_css(&self) -> String {
         let accent_fg = contrast_fg(&self.accent);
-        let destructive_fg = contrast_fg(&self.red);
-        let success_fg = contrast_fg(&self.green);
-        let warning_fg = contrast_fg(&self.yellow);
         format!(
             r#"/* OmaBring follows the active Omarchy theme. */
-:root, window.omabring {{
-  --window-bg-color: {bg};
-  --window-fg-color: {fg};
-  --view-bg-color: {bg};
-  --view-fg-color: {fg};
-  --headerbar-bg-color: {darker};
-  --headerbar-fg-color: {fg};
-  --headerbar-border-color: {selection};
-  --sidebar-bg-color: {darker};
-  --sidebar-fg-color: {fg};
-  --sidebar-border-color: {selection};
-  --card-bg-color: {lighter};
-  --card-fg-color: {fg};
-  --popover-bg-color: {lighter};
-  --popover-fg-color: {fg};
-  --dialog-bg-color: {lighter};
-  --dialog-fg-color: {fg};
-  --accent-bg-color: {accent};
-  --accent-fg-color: {accent_fg};
-  --accent-color: {accent};
-  --destructive-bg-color: {red};
-  --destructive-fg-color: {destructive_fg};
-  --destructive-color: {red};
-  --success-bg-color: {green};
-  --success-fg-color: {success_fg};
-  --success-color: {green};
-  --warning-bg-color: {yellow};
-  --warning-fg-color: {warning_fg};
-  --warning-color: {yellow};
-  --error-bg-color: {red};
-  --error-fg-color: {destructive_fg};
-  --error-color: {red};
+window.omabring {{
+  --omabring-bg: {bg};
+  --omabring-fg: {fg};
+  --omabring-accent: {accent};
+  --omabring-accent-fg: {accent_fg};
+  --omabring-muted: {muted};
+  --omabring-sidebar-bg: {darker};
+  --omabring-card-bg: {lighter};
+  --omabring-selection: {selection};
+  --omabring-danger: {red};
+  --omabring-ok: {green};
+  --omabring-warn: {yellow};
+  background-color: var(--omabring-bg);
+  color: var(--omabring-fg);
 }}
 
-window.omabring,
 window.omabring .sidebar {{
-  background-color: {bg};
-  color: {fg};
+  background-color: var(--omabring-sidebar-bg);
+  color: var(--omabring-fg);
 }}
 "#,
             bg = self.background,
@@ -105,12 +83,10 @@ window.omabring .sidebar {{
             selection = self.selection,
             accent = self.accent,
             accent_fg = accent_fg,
+            muted = self.muted,
             red = self.red,
             green = self.green,
             yellow = self.yellow,
-            destructive_fg = destructive_fg,
-            success_fg = success_fg,
-            warning_fg = warning_fg,
         )
     }
 }
@@ -337,12 +313,22 @@ blue = "#89b4fa"
         assert_eq!(palette.darker_background, "#101019");
         let css = palette.to_css();
         assert!(!css.contains("@define-color"));
-        assert!(!css.contains("@accent_"));
-        assert!(!css.contains("@window_"));
-        assert!(css.contains("--accent-bg-color: #89b4fa;"));
-        assert!(css.contains("--accent-color: #89b4fa;"));
-        assert!(css.contains("--window-bg-color: #1e1e2e;"));
-        assert!(css.contains("background-color: #1e1e2e;"));
+        assert!(!css.contains(":root"));
+        assert!(!css.contains("--window-"));
+        assert!(!css.contains("--accent-"));
+        assert!(!css.contains("--view-"));
+        assert!(!css.contains("--headerbar-"));
+        assert!(!css.contains("--sidebar-"));
+        assert!(!css.contains("--card-"));
+        assert!(!css.contains("--popover-"));
+        assert!(!css.contains("--dialog-"));
+        assert!(!css.contains("--destructive-"));
+        assert!(!css.contains("--success-"));
+        assert!(!css.contains("--warning-"));
+        assert!(!css.contains("--error-"));
+        assert!(css.contains("--omabring-bg: #1e1e2e;"));
+        assert!(css.contains("--omabring-accent: #89b4fa;"));
+        assert!(css.contains("background-color: var(--omabring-bg);"));
     }
 
     #[test]

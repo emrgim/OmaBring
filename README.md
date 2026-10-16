@@ -15,15 +15,9 @@ The window is GTK 4 and libadwaita. It follows the active Omarchy theme and runs
 
 ## Omarchy
 
-The app reads the active theme from `~/.config/omarchy/current/theme/colors.toml`, and from `~/.local/state/omarchy/current/theme/colors.toml` when the first path is not present. `OMABRING_THEME` can point at a theme directory or a `colors.toml` file.
+The app reads the active theme from `~/.config/omarchy/current/theme/colors.toml`, and from `~/.local/state/omarchy/current/theme/colors.toml` when the first path is not present. `OMABRING_THEME` can point at a theme directory or a `colors.toml` file. Palette colors are applied with app-specific names such as `--omabring-bg`. `OMABRING_NO_CSS=1` skips that stylesheet and the color-scheme update.
 
-`install.sh` builds the release binaries, installs a launcher entry so OmaBring shows up in the Omarchy launcher, installs a systemd user service, and copies the bar plugin into `~/.config/omarchy/plugins/emrgim.omabring`.
-
-The plugin id is `emrgim.omabring`. Left-click the bar widget to open the app. Right-click opens a short panel with the same action. From a git checkout, Omarchy can also add it directly:
-
-```sh
-omarchy plugin add https://github.com/emrgim/OmaBring.git --enable
-```
+`install.sh` builds the release binaries, installs a launcher entry so OmaBring shows up in the Omarchy app launcher, and installs a systemd user service. OmaBring does not install a bar plugin. Open it from the app launcher.
 
 ## Install
 
@@ -65,7 +59,7 @@ Live calls run only when the saved account has a contract address (`base_url`). 
 
 `status` may also be `prepared` or `accepted`.
 
-Carrefour, Union Coop, and Grandiose can push that checkout. Spinneys, Waitrose, MMI, and African & Eastern keep the cart locally; checkout opens the store website and does not submit a remote cart. MMI and African & Eastern are search-and-list stores in OmaBring.
+Carrefour, Union Coop, and Grandiose can push that checkout. Spinneys, Waitrose, MMI, and African & Eastern keep the cart locally and do not submit a remote cart. OmaBring does not open a browser or any address. MMI and African & Eastern are search-and-list stores in OmaBring.
 
 If a contract address is missing, or the endpoint does not answer in that shape, search still uses imported receipts and the local cart still works. The public storefronts are not assumed to implement this contract. Point `base_url` at an endpoint that does when you have one.
 
@@ -119,6 +113,5 @@ cargo build --release
 | `crates/omabring-core` | Accounts, encryption, carts, receipts, spending, forecasts, theme colors |
 | `crates/omabring-stores` | Store adapter interface and the seven stores |
 | `crates/omabring-mcp` | HTTP MCP and OAuth |
-| `manifest.json`, `BarWidget.qml`, `Panel.qml` | Omarchy bar plugin `emrgim.omabring` |
 | `packaging/` | Launcher entry and systemd user unit |
 | `install.sh` | Build and install onto the machine |

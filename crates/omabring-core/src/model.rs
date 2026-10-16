@@ -62,7 +62,7 @@ impl StoreId {
 
     /// Remote cart and checkout are part of the store contract for the three
     /// shops that OmaBring can push a prepared cart to. The others keep a
-    /// local cart and open the shop website at checkout.
+    /// local cart. OmaBring does not open an address.
     pub fn remote_checkout(self) -> bool {
         matches!(self, Self::Carrefour | Self::UnionCoop | Self::Grandiose)
     }

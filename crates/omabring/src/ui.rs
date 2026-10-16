@@ -57,22 +57,27 @@ pub fn open_window(app: &adw::Application, core: Arc<App>, backend: Arc<Registry
         .default_height(740)
         .build();
     window.add_css_class("omabring");
-    let provider = gtk::CssProvider::new();
-    if let Some(display) = gtk::gdk::Display::default() {
-        gtk::style_context_add_provider_for_display(
-            &display,
-            &provider,
-            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
-        );
+    // OMABRING_NO_CSS=1 skips the provider, palette CSS, and color-scheme
+    // updates. Styling is applied before the window is shown, never from a
+    // map, show, or notify handler.
+    if !css_disabled() {
+        let provider = gtk::CssProvider::new();
+        if let Some(display) = gtk::gdk::Display::default() {
+            gtk::style_context_add_provider_for_display(
+                &display,
+                &provider,
+                gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+            );
+        }
+        let css = Rc::new(RefCell::new(String::new()));
+        refresh_theme(&provider, &css);
+        let provider_for_tick = provider.clone();
+        let css_for_tick = css.clone();
+        glib::timeout_add_local(std::time::Duration::from_secs(2), move || {
+            refresh_theme(&provider_for_tick, &css_for_tick);
+            ControlFlow::Continue
+        });
     }
-    let css = Rc::new(RefCell::new(String::new()));
-    refresh_theme(&provider, &css);
-    let provider_for_tick = provider.clone();
-    let css_for_tick = css.clone();
-    glib::timeout_add_local(std::time::Duration::from_secs(2), move || {
-        refresh_theme(&provider_for_tick, &css_for_tick);
-        ControlFlow::Continue
-    });
 
     let toast = adw::ToastOverlay::new();
     let root = gtk::Stack::new();
@@ -94,6 +99,10 @@ pub fn open_window(app: &adw::Application, core: Arc<App>, backend: Arc<Registry
         root.set_visible_child_name("login");
     }
     window.present();
+}
+
+fn css_disabled() -> bool {
+    std::env::var("OMABRING_NO_CSS").ok().as_deref() == Some("1")
 }
 
 thread_local! {
@@ -151,7 +160,7 @@ fn build_login(
     let subtitle = gtk::Label::new(Some(
         "Search UAE stores, compare prices, and keep carts, receipts, and forecasts on this machine.",
     ));
-    subtitle.set_wrap(true);
+    wrap_label(&subtitle);
     subtitle.add_css_class("dim-label");
     let email = adw::EntryRow::builder().title("Email").build();
     let password = adw::PasswordEntryRow::builder().title("Password").build();
@@ -163,7 +172,7 @@ fn build_login(
     let create = gtk::Button::with_label("Create account");
     let error = gtk::Label::new(None);
     error.add_css_class("error");
-    error.set_wrap(true);
+    wrap_label(&error);
     box_.append(&title);
     box_.append(&subtitle);
     box_.append(&group);
@@ -280,14 +289,10 @@ fn build_shell(
             shell_ref.range.append(Some(id), label);
         }
         shell_ref.range.set_active(Some(0));
-        shell_ref.search_summary.set_wrap(true);
-        shell_ref.search_summary.set_xalign(0.0);
-        shell_ref.checkout_label.set_wrap(true);
-        shell_ref.checkout_label.set_xalign(0.0);
-        shell_ref.spend_label.set_wrap(true);
-        shell_ref.spend_label.set_xalign(0.0);
-        shell_ref.forecast_label.set_wrap(true);
-        shell_ref.forecast_label.set_xalign(0.0);
+        wrap_label(&shell_ref.search_summary);
+        wrap_label(&shell_ref.checkout_label);
+        wrap_label(&shell_ref.spend_label);
+        wrap_label(&shell_ref.forecast_label);
         shell_ref.account_label.set_xalign(0.0);
         shell_ref.service_label.set_xalign(0.0);
         shell_ref.search_list.add_css_class("boxed-list");
@@ -443,8 +448,7 @@ fn page(id: &str, shell_rc: &Rc<RefCell<Shell>>) -> gtk::Widget {
             let intro = gtk::Label::new(Some(
                 "Save each store sign-in on this machine. Add a contract address only when that store speaks the OmaBring store contract. Without one, search still uses your receipts and the cart stays local.",
             ));
-            intro.set_wrap(true);
-            intro.set_xalign(0.0);
+            wrap_label(&intro);
             page.append(&intro);
             let scroll = scrolled(&shell.store_box);
             page.append(&scroll);
@@ -455,8 +459,7 @@ fn page(id: &str, shell_rc: &Rc<RefCell<Shell>>) -> gtk::Widget {
             let note = gtk::Label::new(Some(
                 "The background service lets an approved client use the same carts, receipts, search, and forecasts. Approve each client in this window.",
             ));
-            note.set_wrap(true);
-            note.set_xalign(0.0);
+            wrap_label(&note);
             let sign_out = gtk::Button::with_label("Sign out");
             sign_out.add_css_class("destructive-action");
             sign_out.set_halign(gtk::Align::Start);
@@ -468,6 +471,14 @@ fn page(id: &str, shell_rc: &Rc<RefCell<Shell>>) -> gtk::Widget {
         _ => {}
     }
     page.upcast()
+}
+
+/// Bound wrapped text so measure does not chase an unconstrained width.
+fn wrap_label(label: &gtk::Label) {
+    label.set_wrap(true);
+    label.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+    label.set_max_width_chars(48);
+    label.set_xalign(0.0);
 }
 
 fn scrolled(child: &impl IsA<gtk::Widget>) -> gtk::ScrolledWindow {
@@ -895,7 +906,7 @@ fn refresh_stores(shell: &Rc<RefCell<Shell>>) {
                 if link.remote_checkout {
                     ". Remote checkout is available when a contract address is set."
                 } else {
-                    ". Cart stays on this machine; checkout opens the store."
+                    ". Cart stays on this machine. Payment stays with the store."
                 }
             )
         } else {
