@@ -1,15 +1,19 @@
 #![allow(deprecated)]
 
 use std::cell::{Cell, RefCell};
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use gtk::gio::{Cancellable, FileMonitorFlags};
 use gtk::glib::{self, ControlFlow};
+use gtk::prelude::FileExt;
 use gtk4 as gtk;
 use libadwaita as adw;
 use libadwaita::prelude::*;
 use omabring_core::{
-    home_dir, load_active_palette, App, CartLine, Offer, SpendRange, StoreId, StoreSecrets,
+    home_dir, load_active_palette, theme_watch_paths, App, CartLine, Offer, SpendRange, StoreId,
+    StoreSecrets,
 };
 use omabring_stores::Registry;
 
@@ -46,6 +50,9 @@ pub fn open_window(app: &adw::Application, core: Arc<App>, backend: Arc<Registry
         .default_height(740)
         .build();
     window.add_css_class("omabring");
+    // Hyprland draws the frame. A client header bar fights that and keeps
+    // the Adwaita chrome.
+    window.set_decorated(false);
     // OMABRING_NO_CSS=1 skips the provider, palette CSS, and color-scheme
     // updates. Styling is applied before the window is shown, never from a
     // map, show, or notify handler.
@@ -55,17 +62,10 @@ pub fn open_window(app: &adw::Application, core: Arc<App>, backend: Arc<Registry
             gtk::style_context_add_provider_for_display(
                 &display,
                 &provider,
-                gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+                gtk::STYLE_PROVIDER_PRIORITY_USER,
             );
         }
-        let css = Rc::new(RefCell::new(String::new()));
-        refresh_theme(&provider, &css);
-        let provider_for_tick = provider.clone();
-        let css_for_tick = css.clone();
-        glib::timeout_add_local(std::time::Duration::from_secs(2), move || {
-            refresh_theme(&provider_for_tick, &css_for_tick);
-            ControlFlow::Continue
-        });
+        follow_theme(provider);
     }
 
     let toast = adw::ToastOverlay::new();
@@ -81,6 +81,49 @@ fn css_disabled() -> bool {
 
 thread_local! {
     static APPLYING_THEME: Cell<bool> = const { Cell::new(false) };
+}
+
+fn follow_theme(provider: gtk::CssProvider) {
+    let css = Rc::new(RefCell::new(String::new()));
+    refresh_theme(&provider, &css);
+    let monitors = Rc::new(RefCell::new(Vec::<gtk::gio::FileMonitor>::new()));
+    let armed = Rc::new(RefCell::new(Vec::<PathBuf>::new()));
+    let provider_for_watch = provider.clone();
+    let css_for_watch = css.clone();
+    let arm = move || {
+        let paths = theme_watch_paths(&home_dir());
+        if *armed.borrow() == paths {
+            return;
+        }
+        *armed.borrow_mut() = paths.clone();
+        let mut held = monitors.borrow_mut();
+        held.clear();
+        for path in paths {
+            let file = gtk::gio::File::for_path(&path);
+            let watched = if path.is_dir() {
+                file.monitor_directory(FileMonitorFlags::WATCH_MOVES, Cancellable::NONE)
+            } else {
+                file.monitor_file(FileMonitorFlags::WATCH_MOVES, Cancellable::NONE)
+            };
+            let Ok(monitor) = watched else {
+                continue;
+            };
+            let provider = provider_for_watch.clone();
+            let css = css_for_watch.clone();
+            monitor.connect_changed(move |_, _, _, _| {
+                refresh_theme(&provider, &css);
+            });
+            held.push(monitor);
+        }
+    };
+    arm();
+    let provider_for_tick = provider.clone();
+    let css_for_tick = css.clone();
+    glib::timeout_add_local(std::time::Duration::from_secs(2), move || {
+        refresh_theme(&provider_for_tick, &css_for_tick);
+        arm();
+        ControlFlow::Continue
+    });
 }
 
 fn refresh_theme(provider: &gtk::CssProvider, current: &RefCell<String>) {
@@ -209,10 +252,10 @@ fn build_shell(
         let row = gtk::Label::builder()
             .label(title)
             .xalign(0.0)
-            .margin_top(10)
-            .margin_bottom(10)
-            .margin_start(12)
-            .margin_end(12)
+            .margin_top(6)
+            .margin_bottom(6)
+            .margin_start(10)
+            .margin_end(10)
             .build();
         row.set_widget_name(id);
         sidebar.append(&row);
@@ -231,18 +274,13 @@ fn build_shell(
     let split = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     let side_scroll = gtk::ScrolledWindow::builder()
         .child(&sidebar)
-        .width_request(180)
+        .width_request(168)
         .vexpand(true)
         .build();
     side_scroll.add_css_class("sidebar");
     split.append(&side_scroll);
     split.append(&gtk::Separator::new(gtk::Orientation::Vertical));
     split.append(&stack);
-
-    let header = adw::HeaderBar::new();
-    let view = adw::ToolbarView::new();
-    view.add_top_bar(&header);
-    view.set_content(Some(&split));
 
     wire(&shell);
     refresh_cart(&shell);
@@ -256,16 +294,16 @@ fn build_shell(
         refresh_service(&shell_for_consent);
         ControlFlow::Continue
     });
-    view.upcast()
+    split.upcast()
 }
 
 fn page(id: &str, shell_rc: &Rc<RefCell<Shell>>) -> gtk::Widget {
     let shell = shell_rc.borrow();
-    let page = gtk::Box::new(gtk::Orientation::Vertical, 12);
-    page.set_margin_top(16);
-    page.set_margin_bottom(16);
-    page.set_margin_start(16);
-    page.set_margin_end(16);
+    let page = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    page.set_margin_top(8);
+    page.set_margin_bottom(8);
+    page.set_margin_start(8);
+    page.set_margin_end(8);
     match id {
         "search" => {
             let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -877,6 +915,7 @@ fn poll_consent(shell: &Rc<RefCell<Shell>>) {
             request.client_name
         )),
     );
+    dialog.add_css_class("omabring");
     dialog.add_response("deny", "Deny");
     dialog.add_response("allow", "Allow");
     dialog.set_response_appearance("allow", adw::ResponseAppearance::Suggested);

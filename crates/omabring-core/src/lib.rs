@@ -16,7 +16,8 @@ pub use crypto::pkce_s256;
 pub use error::{Error, Result};
 pub use model::*;
 pub use theme::{
-    load_active_palette, load_palette_path, load_palette_str, resolve_theme_dir, Palette,
+    load_active_palette, load_palette_path, load_palette_str, resolve_theme_dir, theme_watch_paths,
+    Palette,
 };
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

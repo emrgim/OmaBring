@@ -15,7 +15,9 @@ The window is GTK 4 and libadwaita. It follows the active Omarchy theme and runs
 
 ## Omarchy
 
-The app reads the active theme from `~/.config/omarchy/current/theme/colors.toml`, and from `~/.local/state/omarchy/current/theme/colors.toml` when the first path is not present. `OMABRING_THEME` can point at a theme directory or a `colors.toml` file. Palette colors are applied with app-specific names such as `--omabring-bg`. `OMABRING_NO_CSS=1` skips that stylesheet and the color-scheme update.
+The app reads the active theme from `~/.config/omarchy/current/theme`, then from `~/.local/state/omarchy/current/theme`. Colors come from `colors.toml` when it is present, and otherwise from `alacritty.toml`, `walker.css`, or the waybar stylesheet in that directory. The monospace face comes from `~/.config/fontconfig/fonts.conf` (the file Omarchy writes when the font changes), then from the terminal font config. Those colors become the window background, foreground, accent, borders, and selection. The window is flat and compact, with no title-bar chrome, so it sits in a Hyprland tile. `OMABRING_THEME` can point at a theme directory or a color file. `OMABRING_NO_CSS=1` skips that stylesheet and the color-scheme update.
+
+The theme directory is watched. Switching theme with `omarchy-theme-set`, or changing the font config, restyles the open window.
 
 `install.sh` builds the release binaries, installs a launcher entry so OmaBring shows up in the Omarchy app launcher, and installs a systemd user service. OmaBring does not install a bar plugin. Open it from the app launcher.
 
