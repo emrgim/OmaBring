@@ -96,20 +96,41 @@ pub fn open_window(app: &adw::Application, core: Arc<App>, backend: Arc<Registry
     window.present();
 }
 
+thread_local! {
+    static APPLYING_THEME: Cell<bool> = const { Cell::new(false) };
+}
+
 fn refresh_theme(provider: &gtk::CssProvider, current: &RefCell<String>) {
-    let palette = load_active_palette(&home_dir());
-    let css = palette.to_css();
-    if css == *current.borrow() {
+    // load_from_data and set_color_scheme restyle synchronously. Applying
+    // again from that restyle would recurse on the main thread.
+    if APPLYING_THEME.get() {
         return;
     }
-    provider.load_from_data(&css);
-    *current.borrow_mut() = css;
+    APPLYING_THEME.set(true);
+    struct ClearApply;
+    impl Drop for ClearApply {
+        fn drop(&mut self) {
+            APPLYING_THEME.set(false);
+        }
+    }
+    let _guard = ClearApply;
+
+    let palette = load_active_palette(&home_dir());
+    let css = palette.to_css();
+    if css != *current.borrow() {
+        // Record first so a restyle sees the same stylesheet and returns.
+        *current.borrow_mut() = css.clone();
+        provider.load_from_data(&css);
+    }
     let scheme = if palette.dark {
         adw::ColorScheme::ForceDark
     } else {
         adw::ColorScheme::ForceLight
     };
-    adw::StyleManager::default().set_color_scheme(scheme);
+    let manager = adw::StyleManager::default();
+    if manager.color_scheme() != scheme {
+        manager.set_color_scheme(scheme);
+    }
 }
 
 fn build_login(

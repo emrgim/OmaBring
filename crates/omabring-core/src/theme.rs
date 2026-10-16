@@ -1,4 +1,6 @@
+use std::collections::HashSet;
 use std::fs;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -40,6 +42,15 @@ impl Palette {
         }
     }
 
+    /// Stylesheet for the active palette.
+    ///
+    /// Values are literal hex custom properties. Libadwaita derives
+    /// `accent_color` with `oklab(from accent_bg_color)` and publishes the
+    /// same names as CSS variables (`--accent-bg-color: @accent_bg_color`,
+    /// and the same for window, destructive, success, warning, and error).
+    /// Redefining those names with `@define-color` makes that resolution
+    /// recurse until the main thread overflows. Hex variables do not point
+    /// back at the named colors.
     pub fn to_css(&self) -> String {
         let accent_fg = contrast_fg(&self.accent);
         let destructive_fg = contrast_fg(&self.red);
@@ -47,41 +58,44 @@ impl Palette {
         let warning_fg = contrast_fg(&self.yellow);
         format!(
             r#"/* OmaBring follows the active Omarchy theme. */
-@define-color window_bg_color {bg};
-@define-color window_fg_color {fg};
-@define-color view_bg_color {bg};
-@define-color view_fg_color {fg};
-@define-color headerbar_bg_color {darker};
-@define-color headerbar_fg_color {fg};
-@define-color headerbar_border_color {selection};
-@define-color sidebar_bg_color {darker};
-@define-color sidebar_fg_color {fg};
-@define-color sidebar_border_color {selection};
-@define-color card_bg_color {lighter};
-@define-color card_fg_color {fg};
-@define-color popover_bg_color {lighter};
-@define-color popover_fg_color {fg};
-@define-color dialog_bg_color {lighter};
-@define-color dialog_fg_color {fg};
-@define-color accent_bg_color {accent};
-@define-color accent_fg_color {accent_fg};
-@define-color accent_color {accent};
-@define-color destructive_bg_color {red};
-@define-color destructive_fg_color {destructive_fg};
-@define-color destructive_color {red};
-@define-color success_bg_color {green};
-@define-color success_color {green};
-@define-color success_fg_color {success_fg};
-@define-color warning_bg_color {yellow};
-@define-color warning_color {yellow};
-@define-color warning_fg_color {warning_fg};
-@define-color error_bg_color {red};
-@define-color error_color {red};
-@define-color error_fg_color {destructive_fg};
+:root, window.omabring {{
+  --window-bg-color: {bg};
+  --window-fg-color: {fg};
+  --view-bg-color: {bg};
+  --view-fg-color: {fg};
+  --headerbar-bg-color: {darker};
+  --headerbar-fg-color: {fg};
+  --headerbar-border-color: {selection};
+  --sidebar-bg-color: {darker};
+  --sidebar-fg-color: {fg};
+  --sidebar-border-color: {selection};
+  --card-bg-color: {lighter};
+  --card-fg-color: {fg};
+  --popover-bg-color: {lighter};
+  --popover-fg-color: {fg};
+  --dialog-bg-color: {lighter};
+  --dialog-fg-color: {fg};
+  --accent-bg-color: {accent};
+  --accent-fg-color: {accent_fg};
+  --accent-color: {accent};
+  --destructive-bg-color: {red};
+  --destructive-fg-color: {destructive_fg};
+  --destructive-color: {red};
+  --success-bg-color: {green};
+  --success-fg-color: {success_fg};
+  --success-color: {green};
+  --warning-bg-color: {yellow};
+  --warning-fg-color: {warning_fg};
+  --warning-color: {yellow};
+  --error-bg-color: {red};
+  --error-fg-color: {destructive_fg};
+  --error-color: {red};
+}}
 
-window, .sidebar {{
-  background-color: @window_bg_color;
-  color: @window_fg_color;
+window.omabring,
+window.omabring .sidebar {{
+  background-color: {bg};
+  color: {fg};
 }}
 "#,
             bg = self.background,
@@ -119,9 +133,52 @@ pub fn resolve_theme_dir_at(home: &Path, override_dir: Option<&Path>) -> Option<
         home.join(".local/state/omarchy/current/theme"),
     ];
     for candidate in candidates {
-        if candidate.join("colors.toml").is_file() || candidate.is_file() {
+        if theme_colors_file(&candidate).is_some() {
             return Some(candidate);
         }
+    }
+    None
+}
+
+/// Resolve `path` to a readable `colors.toml`, refusing symlink cycles.
+///
+/// A cycle between `~/.config/omarchy/current/theme` and
+/// `~/.local/state/omarchy/current/theme` is not a theme. The walk is
+/// iterative and bounded, so a loop cannot grow the stack.
+fn theme_colors_file(path: &Path) -> Option<PathBuf> {
+    let resolved = follow_limited(path, 16)?;
+    let file = if resolved.is_dir() {
+        follow_limited(&resolved.join("colors.toml"), 16)?
+    } else {
+        resolved
+    };
+    if file.is_file() {
+        Some(file)
+    } else {
+        None
+    }
+}
+
+fn follow_limited(path: &Path, max_hops: usize) -> Option<PathBuf> {
+    let mut current = path.to_path_buf();
+    let mut seen = HashSet::new();
+    for _ in 0..=max_hops {
+        let meta = fs::symlink_metadata(&current).ok()?;
+        if !seen.insert((meta.dev(), meta.ino())) {
+            return None;
+        }
+        if !meta.file_type().is_symlink() {
+            return Some(current);
+        }
+        let target = fs::read_link(&current).ok()?;
+        current = if target.is_absolute() {
+            target
+        } else {
+            current
+                .parent()
+                .unwrap_or_else(|| Path::new("/"))
+                .join(target)
+        };
     }
     None
 }
@@ -194,11 +251,7 @@ pub fn load_palette_str(text: &str) -> Option<Palette> {
 }
 
 pub fn load_palette_path(path: &Path) -> Option<Palette> {
-    let file = if path.is_dir() {
-        path.join("colors.toml")
-    } else {
-        path.to_path_buf()
-    };
+    let file = theme_colors_file(path)?;
     let text = fs::read_to_string(file).ok()?;
     load_palette_str(&text)
 }
@@ -283,8 +336,13 @@ blue = "#89b4fa"
         assert_eq!(palette.accent, "#89b4fa");
         assert_eq!(palette.darker_background, "#101019");
         let css = palette.to_css();
-        assert!(css.contains("@define-color accent_bg_color #89b4fa;"));
-        assert!(css.contains("@define-color window_bg_color #1e1e2e;"));
+        assert!(!css.contains("@define-color"));
+        assert!(!css.contains("@accent_"));
+        assert!(!css.contains("@window_"));
+        assert!(css.contains("--accent-bg-color: #89b4fa;"));
+        assert!(css.contains("--accent-color: #89b4fa;"));
+        assert!(css.contains("--window-bg-color: #1e1e2e;"));
+        assert!(css.contains("background-color: #1e1e2e;"));
     }
 
     #[test]
@@ -327,5 +385,38 @@ selection_background = "#d0d8e8"
         let dir = resolve_theme_dir_at(home.path(), None).unwrap();
         let palette = load_palette_path(&dir).unwrap();
         assert_eq!(palette.background, "#111111");
+    }
+
+    #[test]
+    fn follows_config_symlink_to_state_theme() {
+        let home = tempfile::tempdir().unwrap();
+        let state = home.path().join(".local/state/omarchy/current/theme");
+        fs::create_dir_all(&state).unwrap();
+        fs::write(
+            state.join("colors.toml"),
+            "background = \"#222222\"\nforeground = \"#eeeeee\"\n",
+        )
+        .unwrap();
+        let config_parent = home.path().join(".config/omarchy/current");
+        fs::create_dir_all(&config_parent).unwrap();
+        std::os::unix::fs::symlink(&state, config_parent.join("theme")).unwrap();
+        let palette = load_active_palette(home.path());
+        assert_eq!(palette.background, "#222222");
+    }
+
+    #[test]
+    fn symlink_cycle_falls_back_without_recursing() {
+        let home = tempfile::tempdir().unwrap();
+        let config = home.path().join(".config/omarchy/current/theme");
+        let state = home.path().join(".local/state/omarchy/current/theme");
+        fs::create_dir_all(config.parent().unwrap()).unwrap();
+        fs::create_dir_all(state.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&state, &config).unwrap();
+        std::os::unix::fs::symlink(&config, &state).unwrap();
+        assert!(resolve_theme_dir_at(home.path(), None).is_none());
+        let palette = load_active_palette(home.path());
+        assert_eq!(palette, Palette::fallback());
+        assert!(load_palette_path(&config).is_none());
+        assert!(load_palette_path(&state).is_none());
     }
 }
