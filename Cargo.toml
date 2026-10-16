@@ -1,0 +1,17 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/omabring-core",
+    "crates/omabring-stores",
+    "crates/omabring-oauth",
+    "crates/omabring-mcp",
+    "crates/omabring-web",
+    "crates/omabring",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Emiliano Morgia"]
+publish = false

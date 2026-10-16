@@ -1,0 +1,13 @@
+[package]
+name = "omabring-oauth"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "OmaBring OAuth for MCP connectors"
+
+[dependencies]
+base64 = "0.22"
+serde_json = "1"
+sha2 = "0.10"

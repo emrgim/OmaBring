@@ -1,0 +1,18 @@
+[package]
+name = "omabring-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "OmaBring MCP server"
+
+[dependencies]
+base64 = "0.22"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+hmac = "0.12"
+omabring-core = { path = "../omabring-core" }
+omabring-oauth = { path = "../omabring-oauth" }
+omabring-stores = { path = "../omabring-stores" }
+serde_json = "1"
+sha1 = "0.10"

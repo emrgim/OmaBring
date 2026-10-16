@@ -1,0 +1,16 @@
+[package]
+name = "omabring"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "OmaBring grocery dashboard and MCP server"
+
+[[bin]]
+name = "omabring"
+path = "src/main.rs"
+
+[dependencies]
+omabring-core = { path = "../omabring-core" }
+omabring-web = { path = "../omabring-web" }

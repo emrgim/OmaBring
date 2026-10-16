@@ -1,0 +1,13 @@
+[Unit]
+Description=OmaBring grocery dashboard and MCP
+After=network.target
+
+[Service]
+ExecStart=%h/.local/bin/omabring
+Environment=OMABRING_DATA=%h/.omabring
+Environment=OMABRING_HOST=127.0.0.1
+Environment=OMABRING_PORT=8877
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

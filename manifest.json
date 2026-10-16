@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "emrgim.omabring",
+  "name": "OmaBring",
+  "version": "0.1.0",
+  "author": "Emiliano Morgia",
+  "license": "MIT",
+  "description": "UAE grocery dashboard and MCP server for SuperOmi. Search, carts, invoices, spend, and buy-again forecasts.",
+  "kinds": ["bar-widget"],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "OmaBring",
+    "category": "Shopping",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
