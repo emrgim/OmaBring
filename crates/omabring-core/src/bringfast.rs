@@ -46,6 +46,11 @@ pub struct ImportReport {
     pub accounts_existing: usize,
     pub accounts_skipped: usize,
     pub skipped_stores: Vec<String>,
+    pub receipt_files: bool,
+    pub files_scanned: usize,
+    pub files_new: usize,
+    pub files_existing: usize,
+    pub files_unparsed: usize,
     pub note: String,
 }
 
@@ -80,6 +85,13 @@ impl std::fmt::Display for ImportReport {
         )?;
         if !self.skipped_stores.is_empty() {
             writeln!(f, "skipped stores: {}", self.skipped_stores.join(", "))?;
+        }
+        if self.receipt_files {
+            writeln!(
+                f,
+                "receipt files: {} scanned, {} new, {} already stored, {} unparsed",
+                self.files_scanned, self.files_new, self.files_existing, self.files_unparsed
+            )?;
         }
         if !self.note.is_empty() {
             writeln!(f, "{}", self.note)?;
@@ -117,6 +129,11 @@ impl App {
             accounts_existing: 0,
             accounts_skipped: 0,
             skipped_stores: Vec::new(),
+            receipt_files: false,
+            files_scanned: 0,
+            files_new: 0,
+            files_existing: 0,
+            files_unparsed: 0,
             note: String::new(),
         };
         if options.store_accounts && key.is_none() && table_exists(&source, "retailer_accounts") {
@@ -139,6 +156,9 @@ impl App {
                 receipts.as_deref(),
                 &mut report,
             )?;
+            if let Some(dir) = receipts.as_deref() {
+                crate::receipts::import_receipt_files(dest, options.dry_run, dir, &mut report)?;
+            }
             import_products(
                 &source,
                 dest,
@@ -453,10 +473,78 @@ fn write_image(dest: &Connection, app: &App, key: &str, source: &str, bytes: &[u
     Ok(())
 }
 
+/// Image URLs Bring Fast stored on receipt lines and product records.
+pub fn bringfast_image_index(path: &Path) -> HashMap<String, Vec<String>> {
+    let mut map = HashMap::new();
+    let Ok(bytes) = fs::read(path) else {
+        return map;
+    };
+    if !bytes.starts_with(b"SQLite format 3") {
+        return map;
+    }
+    let Ok(conn) = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+    else {
+        return map;
+    };
+    if table_exists(&conn, "invoice_items") {
+        let _ = collect_image_urls(
+            &conn,
+            "SELECT ifnull(name, ''), ifnull(product_key, ''), ifnull(image_url, '') FROM invoice_items",
+            &mut map,
+        );
+    }
+    if table_exists(&conn, "product_meta") {
+        let _ = collect_image_urls(
+            &conn,
+            "SELECT ifnull(official_name, ''), ifnull(product_key, ''), ifnull(image_url, '') FROM product_meta",
+            &mut map,
+        );
+    }
+    map
+}
+
+fn collect_image_urls(
+    conn: &Connection,
+    sql: &str,
+    map: &mut HashMap<String, Vec<String>>,
+) -> Result<()> {
+    let mut stmt = conn.prepare(sql)?;
+    let rows = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    })?;
+    for row in rows {
+        let (name, key, url) = row?;
+        push_url(map, &crate::model::normalize_name(&name), &url);
+        push_url(map, key.trim(), &url);
+    }
+    Ok(())
+}
+
+fn push_url(map: &mut HashMap<String, Vec<String>>, key: &str, url: &str) {
+    let key = key.trim();
+    let url = url.trim();
+    if key.is_empty() || url.is_empty() {
+        return;
+    }
+    let entry = map.entry(key.to_string()).or_default();
+    if !entry.iter().any(|have| have == url) {
+        entry.push(url.to_string());
+    }
+}
+
 fn locate_image(line: &Line, receipts_dir: Option<&Path>, key: &str) -> Option<Vec<u8>> {
     let mut candidates = Vec::new();
+    let safe = crate::household::safe_key(key);
+    for dir in crate::household::product_image_dirs(None, receipts_dir) {
+        for ext in ["webp", "png", "jpg", "jpeg", "gif"] {
+            candidates.push(dir.join(format!("{safe}.{ext}")));
+        }
+    }
     if let Some(dir) = receipts_dir {
-        let safe = crate::household::safe_key(key);
         for ext in ["webp", "png", "jpg", "jpeg", "gif"] {
             candidates.push(dir.join(format!("{safe}.{ext}")));
             candidates.push(dir.join("product-images").join(format!("{safe}.{ext}")));
@@ -1518,5 +1606,118 @@ COPY public.invoice_items (id, invoice_id, barcode, name, qty, unit_price, line_
         let invoices = app.list_invoices().unwrap();
         assert_eq!(invoices.len(), 1);
         assert_eq!(invoices[0].purchased_on, "2024-11-03");
+    }
+
+    #[test]
+    fn careem_and_mcdonalds_import_and_receipt_files_dedup() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("bringfast.db");
+        let conn = Connection::open(&source).unwrap();
+        conn.execute_batch(MEMORY_SCHEMA).unwrap();
+        conn.execute(
+            "INSERT INTO invoices (id, user_id, retailer, invoice_no, invoice_date) VALUES (1, 1, 'careem', 'CRM-DB', '2026-08-01')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO invoice_items (id, invoice_id, name, qty, unit_price, line_total, product_key) VALUES (1, 1, 'Shawarma', 1, 20, 20, 'shawarma')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO invoices (id, user_id, retailer, invoice_no, invoice_date) VALUES (2, 1, 'mcdonalds', '1840105-0786-20260405', '2026-04-05')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO invoice_items (id, invoice_id, name, qty, unit_price, line_total, product_key) VALUES (2, 2, 'Cheeseburger', 1, 8, 8, 'burger')",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+
+        let receipts = dir.path().join("receipts");
+        fs::create_dir_all(receipts.join("careem")).unwrap();
+        fs::create_dir_all(receipts.join("mcdonalds")).unwrap();
+        fs::write(
+            receipts.join("mcdonalds/1840105-0786-20260405.html"),
+            r#"<div>We got your order, here's your receipt.</div>
+<div>Restaurant Number:</div><div>1840105</div>
+<div>Order Id:</div><div>0786</div>
+<div>Delivery Date:</div><div>05/04/26 17:06</div>
+<table>
+ <tr><th>Qty</th><th>Item Detail</th><th>Item Cost</th></tr>
+ <tr><td>1</td><td>Double Cheeseburger Large Meal</td><td>AED 29.00</td></tr>
+</table>"#,
+        )
+        .unwrap();
+        fs::write(
+            receipts.join("careem/CRM-NEW.html"),
+            "Tax Invoice\nCareem Networks\nInvoice No: CRM-NEW\nInvoice Date: 26 Aug 2026\n1 x Falafel Wrap AED 22.00\nTotal AED 22.00\n",
+        )
+        .unwrap();
+
+        let app = App::open(dir.path().join("oma")).unwrap();
+        let report = app
+            .import_bringfast(
+                &source,
+                &BringfastImport {
+                    dry_run: false,
+                    receipts_dir: Some(receipts),
+                    store_accounts: false,
+                },
+            )
+            .unwrap();
+        assert_eq!(report.invoices_new, 2);
+        assert_eq!(report.lines, 3);
+        assert!(report.skipped_stores.is_empty());
+        assert_eq!(report.files_scanned, 2);
+        assert_eq!(report.files_existing, 1);
+        assert_eq!(report.files_new, 1);
+        assert_eq!(report.files_unparsed, 0);
+        let invoices = app.list_invoices().unwrap();
+        assert_eq!(invoices.len(), 3);
+        assert!(invoices
+            .iter()
+            .any(|invoice| { invoice.store == StoreId::Careem && invoice.invoice_no == "CRM-DB" }));
+        assert!(invoices.iter().any(|invoice| {
+            invoice.store == StoreId::Mcdonalds && invoice.invoice_no == "1840105-0786-20260405"
+        }));
+        let added = invoices
+            .iter()
+            .find(|invoice| invoice.invoice_no == "CRM-NEW")
+            .unwrap();
+        assert_eq!(added.store, StoreId::Careem);
+        assert_eq!(added.purchased_on, "2026-08-26");
+        assert_eq!(added.lines.len(), 1);
+        assert_eq!(added.lines[0].name, "Falafel Wrap");
+    }
+
+    #[test]
+    fn image_index_keeps_bringfast_urls_by_name_and_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("bringfast.db");
+        let conn = Connection::open(&source).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE invoice_items (name TEXT, product_key TEXT, image_url TEXT);
+             CREATE TABLE product_meta (official_name TEXT, product_key TEXT, image_url TEXT);",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO invoice_items (name, product_key, image_url) VALUES ('Oat Milk', 'oat', '/product-images/oat.webp')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO product_meta (official_name, product_key, image_url) VALUES ('Oat Milk', 'oat', 'https://cdn.example/oat.png')",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+        let index = bringfast_image_index(&source);
+        let urls = index.get("oat milk").unwrap();
+        assert!(urls.iter().any(|url| url == "/product-images/oat.webp"));
+        assert!(urls.iter().any(|url| url == "https://cdn.example/oat.png"));
+        assert_eq!(index.get("oat").unwrap().len(), 2);
     }
 }

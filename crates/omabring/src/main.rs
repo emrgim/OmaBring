@@ -169,6 +169,24 @@ fn main() -> glib::ExitCode {
             }
         }
     }
+    if let Some(page) = flag_value(&args, "--page") {
+        match page {
+            Ok(name) => std::env::set_var("OMABRING_PAGE", name),
+            Err(()) => {
+                eprintln!("omabring --page needs a tab name");
+                return glib::ExitCode::from(2);
+            }
+        }
+    }
+    if let Some(chart) = flag_value(&args, "--chart") {
+        match chart {
+            Ok(name) => std::env::set_var("OMABRING_CHART", name),
+            Err(()) => {
+                eprintln!("omabring --chart needs a chart name");
+                return glib::ExitCode::from(2);
+            }
+        }
+    }
     if std::env::var_os("WAYLAND_DISPLAY").is_some() && std::env::var_os("GDK_BACKEND").is_none() {
         std::env::set_var("GDK_BACKEND", "wayland");
     }
@@ -278,7 +296,11 @@ fn import_bringfast(
         Ok(report) => {
             print!("{report}");
             if fetch_images && !dry_run {
-                backfill_images(&core);
+                backfill_images(
+                    &core,
+                    std::path::Path::new(path),
+                    receipts_dir.map(std::path::Path::new),
+                );
             }
             glib::ExitCode::SUCCESS
         }
@@ -289,8 +311,8 @@ fn import_bringfast(
     }
 }
 
-/// Pictures Bring Fast would attach by searching the store that sold the product.
-fn backfill_images(core: &App) {
+/// Pictures from Bring Fast's cache and image URLs, then every catalog search.
+fn backfill_images(core: &App, source: &std::path::Path, receipts_dir: Option<&std::path::Path>) {
     let missing = match core.products_missing_images() {
         Ok(rows) => rows,
         Err(err) => {
@@ -302,17 +324,41 @@ fn backfill_images(core: &App) {
         return;
     }
     eprintln!("searching stores for {} product images", missing.len());
+    let dirs = omabring_core::product_image_dirs(Some(source), receipts_dir);
+    let mut urls = omabring_core::bringfast_image_index(source);
+    if let Ok(stored) = core.stored_image_urls() {
+        for (key, list) in stored {
+            urls.entry(key).or_default().extend(list);
+        }
+    }
     let backend = Registry::live();
     let mut saved = 0usize;
     for (index, item) in missing.iter().enumerate() {
-        for store in image_stores(item.store) {
-            let url = match backend.product_image(store, &item.name) {
-                Ok(Some(url)) => url,
-                _ => continue,
-            };
-            if core.cache_remote_image(&item.name, &url).unwrap_or(false) {
-                saved += 1;
-                break;
+        let mut keys = vec![omabring_core::normalize_name(&item.name)];
+        if !item.product_key.trim().is_empty() {
+            keys.push(item.product_key.clone());
+        }
+        let mut item_urls = Vec::new();
+        for key in &keys {
+            if let Some(list) = urls.get(key) {
+                item_urls.extend(list.clone());
+            }
+        }
+        if core
+            .adopt_product_image(&item.name, &keys, &item_urls, &dirs)
+            .unwrap_or(false)
+        {
+            saved += 1;
+        } else {
+            for store in image_stores(item.store) {
+                let url = match backend.product_image(store, &item.name) {
+                    Ok(Some(url)) => url,
+                    _ => continue,
+                };
+                if core.cache_remote_image(&item.name, &url).unwrap_or(false) {
+                    saved += 1;
+                    break;
+                }
             }
         }
         if (index + 1) % 25 == 0 {
@@ -323,8 +369,18 @@ fn backfill_images(core: &App) {
 }
 
 fn image_stores(primary: StoreId) -> Vec<StoreId> {
-    let mut stores = vec![primary, StoreId::Carrefour];
-    stores.dedup();
+    let mut stores = Vec::new();
+    if primary.search() {
+        stores.push(primary);
+    }
+    if !stores.contains(&StoreId::Carrefour) {
+        stores.push(StoreId::Carrefour);
+    }
+    for store in StoreId::all() {
+        if store.search() && !stores.contains(&store) {
+            stores.push(store);
+        }
+    }
     stores
 }
 
@@ -405,7 +461,8 @@ fn print_view(name: &str) -> glib::ExitCode {
 
 #[cfg(test)]
 mod cli_tests {
-    use super::{canonical_view, flag_value};
+    use super::{canonical_view, flag_value, image_stores};
+    use omabring_core::StoreId;
 
     #[test]
     fn reads_search_and_view_flags() {
@@ -447,5 +504,33 @@ mod cli_tests {
         assert_eq!(canonical_view("carts"), Some("stores"));
         assert_eq!(canonical_view("forecast"), Some("forecast"));
         assert_eq!(canonical_view("nope"), None);
+    }
+
+    #[test]
+    fn image_search_uses_every_catalog_after_the_selling_store() {
+        let stores = image_stores(StoreId::Waitrose);
+        assert_eq!(stores[0], StoreId::Waitrose);
+        assert_eq!(stores[1], StoreId::Carrefour);
+        assert!(stores.contains(&StoreId::Grandiose));
+        assert!(stores.contains(&StoreId::UnionCoop));
+        assert!(stores.contains(&StoreId::Spinneys));
+        assert!(stores.contains(&StoreId::Mmi));
+        assert!(stores.contains(&StoreId::AfricanEastern));
+        assert!(stores.iter().all(|store| store.search()));
+        assert!(!stores.contains(&StoreId::Careem));
+        assert!(!stores.contains(&StoreId::Mcdonalds));
+        let careem = image_stores(StoreId::Careem);
+        assert_eq!(careem[0], StoreId::Carrefour);
+        assert!(careem.len() > 2);
+    }
+
+    #[test]
+    fn page_and_chart_flags_keep_their_values() {
+        let args = vec!["omabring".into(), "--page".into(), "forecast".into()];
+        assert_eq!(flag_value(&args, "--page").unwrap().unwrap(), "forecast");
+        let args = vec!["omabring".into(), "--chart=qty-month".into()];
+        assert_eq!(flag_value(&args, "--chart").unwrap().unwrap(), "qty-month");
+        let args = vec!["omabring".into(), "--chart".into()];
+        assert!(flag_value(&args, "--chart").unwrap().is_err());
     }
 }

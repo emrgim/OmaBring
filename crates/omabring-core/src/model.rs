@@ -9,18 +9,30 @@ pub enum StoreId {
     Waitrose,
     Mmi,
     AfricanEastern,
+    /// Food delivery. Emailed invoices land here; there is no catalog.
+    Careem,
+    /// Counter food. Emailed order receipts land here; there is no catalog.
+    Mcdonalds,
+    /// E-commerce. Amazon.it order mail lands here; there is no catalog.
+    AmazonIt,
+    /// E-commerce. Amazon.ae order mail lands here; there is no catalog.
+    AmazonAe,
 }
 
 impl StoreId {
-    pub fn all() -> [StoreId; 7] {
+    pub fn all() -> [StoreId; 11] {
         [
-            Self::Carrefour,
-            Self::UnionCoop,
             Self::Grandiose,
-            Self::Spinneys,
+            Self::UnionCoop,
+            Self::Carrefour,
             Self::Waitrose,
+            Self::Spinneys,
             Self::Mmi,
             Self::AfricanEastern,
+            Self::Careem,
+            Self::Mcdonalds,
+            Self::AmazonIt,
+            Self::AmazonAe,
         ]
     }
 
@@ -33,6 +45,10 @@ impl StoreId {
             Self::Waitrose => "waitrose",
             Self::Mmi => "mmi",
             Self::AfricanEastern => "african_eastern",
+            Self::Careem => "careem",
+            Self::Mcdonalds => "mcdonalds",
+            Self::AmazonIt => "amazon_it",
+            Self::AmazonAe => "amazon_ae",
         }
     }
 
@@ -45,6 +61,10 @@ impl StoreId {
             Self::Waitrose => "Waitrose",
             Self::Mmi => "MMI",
             Self::AfricanEastern => "African & Eastern",
+            Self::Careem => "Careem",
+            Self::Mcdonalds => "McDonald's",
+            Self::AmazonIt => "Amazon.it",
+            Self::AmazonAe => "Amazon.ae",
         }
     }
 
@@ -56,7 +76,38 @@ impl StoreId {
             Self::Spinneys => "https://www.spinneys.com/en-ae/",
             Self::Waitrose => "https://www.waitrose.ae/en/",
             Self::Mmi => "https://www.mmihomedelivery.ae/",
-            Self::AfricanEastern => "https://www.africanandeastern.com/",
+            Self::AfricanEastern => "https://www.africaneasternonline.com/",
+            Self::Careem => "https://www.careem.com/",
+            Self::Mcdonalds => "https://www.mcdonalds.com/ae/en-ae.html",
+            Self::AmazonIt => "https://www.amazon.it/",
+            Self::AmazonAe => "https://www.amazon.ae/",
+        }
+    }
+
+    /// A supermarket catalog can be searched. Careem, McDonald's, and Amazon
+    /// only keep emailed receipts.
+    pub fn search(self) -> bool {
+        !matches!(
+            self,
+            Self::Careem | Self::Mcdonalds | Self::AmazonIt | Self::AmazonAe
+        )
+    }
+
+    /// Emailed or downloaded invoices belong to this store.
+    pub fn receipts(self) -> bool {
+        !matches!(self, Self::UnionCoop | Self::Waitrose | Self::Spinneys)
+    }
+
+    /// The store has its own sign-in. Receipt-only stores do not.
+    pub fn login(self) -> bool {
+        self.search()
+    }
+
+    pub fn mail_domain(self) -> Option<&'static str> {
+        match self {
+            Self::AmazonIt => Some("amazon.it"),
+            Self::AmazonAe => Some("amazon.ae"),
+            _ => None,
         }
     }
 
@@ -81,6 +132,10 @@ impl StoreId {
             "waitrose" => Some(Self::Waitrose),
             "mmi" => Some(Self::Mmi),
             "africaneastern" | "africanandeastern" => Some(Self::AfricanEastern),
+            "careem" => Some(Self::Careem),
+            "mcdonalds" | "mcdonald" => Some(Self::Mcdonalds),
+            "amazonit" | "amazonitaly" => Some(Self::AmazonIt),
+            "amazonae" | "amazonuae" => Some(Self::AmazonAe),
             _ => None,
         }
     }

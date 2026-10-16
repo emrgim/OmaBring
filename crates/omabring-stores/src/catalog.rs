@@ -40,6 +40,9 @@ pub fn search(store: StoreId, query: &str) -> Result<Vec<Offer>, BackendError> {
         ),
         StoreId::Mmi => search_mmi(query),
         StoreId::AfricanEastern => search_african(query),
+        StoreId::Careem | StoreId::Mcdonalds | StoreId::AmazonIt | StoreId::AmazonAe => {
+            Ok(Vec::new())
+        }
     }
 }
 
@@ -92,6 +95,12 @@ pub fn sign_in(
         StoreId::AfricanEastern => {
             secrets.token = Some(african_login(username, password)?);
             Ok(secrets)
+        }
+        StoreId::Careem | StoreId::Mcdonalds | StoreId::AmazonIt | StoreId::AmazonAe => {
+            Err(BackendError::unsupported(format!(
+                "{} keeps invoices from mail. It has no catalog sign-in.",
+                store.name()
+            )))
         }
     }
 }

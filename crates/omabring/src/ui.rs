@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use chrono::{Duration, NaiveDate};
+use chrono::{Datelike, Duration, NaiveDate};
 use gtk::gio::{Cancellable, FileMonitorFlags};
 use gtk::glib::{self, ControlFlow};
 use gtk::prelude::FileExt;
@@ -13,8 +13,7 @@ use gtk4 as gtk;
 use libadwaita as adw;
 use libadwaita::prelude::*;
 use omabring_core::{
-    home_dir, load_window_theme, theme_watch_paths, App, CartLine, ForecastStatus, InvoiceSummary,
-    Offer, StoreId,
+    home_dir, load_window_theme, theme_watch_paths, App, CartLine, InvoiceSummary, Offer, StoreId,
 };
 use omabring_stores::Registry;
 
@@ -37,7 +36,7 @@ enum SortKey {
     Name,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ChartKind {
     Price,
     PriceByStore,
@@ -99,6 +98,9 @@ struct Shell {
     focus_nav: bool,
     focus_query: bool,
     consent_open: Rc<Cell<bool>>,
+    bar_focus: Option<String>,
+    vote_guard: Rc<Cell<bool>>,
+    bar_hit: Rc<Cell<bool>>,
 }
 
 struct Prod {
@@ -262,7 +264,7 @@ fn build_chrome(
     let search_entry = gtk::Entry::new();
     search_entry.set_placeholder_text(Some("Product"));
     search_entry.set_hexpand(true);
-    let page = initial_page();
+    let page = initial_page(&core);
     let focus_query = matches!(page, Page::Search);
     let shell = Rc::new(RefCell::new(Shell {
         core,
@@ -289,7 +291,7 @@ fn build_chrome(
         sort: SortKey::Spent,
         sort_desc: true,
         shortage: false,
-        chart: ChartKind::Price,
+        chart: initial_chart(),
         checkout_note: "Checkout prepares the cart. Payment stays with the store.".into(),
         import_open: false,
         compare: Vec::new(),
@@ -302,6 +304,9 @@ fn build_chrome(
         focus_nav: !focus_query,
         focus_query,
         consent_open: Rc::new(Cell::new(false)),
+        bar_focus: None,
+        vote_guard: Rc::new(Cell::new(false)),
+        bar_hit: Rc::new(Cell::new(false)),
     }));
     let shell_entry = shell.clone();
     let entry = shell.borrow().search_entry.clone();
@@ -381,6 +386,20 @@ fn chrome_root(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
     root.append(&header);
     root.append(&shell.borrow().filters);
     root.append(&scroll);
+    let outside = gtk::GestureClick::new();
+    outside.set_propagation_phase(gtk::PropagationPhase::Bubble);
+    let shell_out = shell.clone();
+    outside.connect_pressed(move |_, _, _, _| {
+        let hit = shell_out.borrow().bar_hit.clone();
+        if hit.replace(false) {
+            return;
+        }
+        if shell_out.borrow().bar_focus.is_some() {
+            shell_out.borrow_mut().bar_focus = None;
+            schedule(&shell_out);
+        }
+    });
+    root.add_controller(outside);
     root
 }
 
@@ -512,17 +531,39 @@ fn page_at(index: usize) -> Page {
 }
 
 fn page_from(value: Option<&str>) -> Page {
-    match value {
+    let value = value.map(|raw| raw.trim().to_ascii_lowercase());
+    match value.as_deref() {
         Some("search") => Page::Search,
+        Some("dashboard") | Some("home") | Some("spend") => Page::Dashboard,
         Some("purchases") | Some("receipts") => Page::Purchases,
         Some("stores") | Some("carts") => Page::Stores,
         Some("settings") | Some("service") => Page::Settings,
+        Some("forecast") => Page::Forecast,
         Some("store") => Page::Store(StoreId::Carrefour),
         Some("product") => Page::Product("Milk".into()),
         Some("receipt") => Page::Receipt(0),
-        Some("forecast") => Page::Forecast,
         _ => Page::Dashboard,
     }
+}
+
+fn chart_from(value: Option<&str>) -> Option<ChartKind> {
+    let value = value.map(|raw| raw.trim().to_ascii_lowercase());
+    match value.as_deref() {
+        Some("price") => Some(ChartKind::Price),
+        Some("price-by-store") | Some("price_by_store") | Some("by-store") => {
+            Some(ChartKind::PriceByStore)
+        }
+        Some("qty-month") | Some("qty") => Some(ChartKind::QtyMonth),
+        Some("spend-month") | Some("spend") => Some(ChartKind::SpendMonth),
+        Some("spend-year") | Some("year") => Some(ChartKind::SpendYear),
+        Some("store-compare") | Some("compare") => Some(ChartKind::StoreCompare),
+        Some("cumulative") | Some("total") => Some(ChartKind::Cumulative),
+        _ => None,
+    }
+}
+
+fn initial_chart() -> ChartKind {
+    chart_from(std::env::var("OMABRING_CHART").ok().as_deref()).unwrap_or(ChartKind::Price)
 }
 
 fn tab_button(shell: &Shell) -> gtk::Button {
@@ -582,6 +623,11 @@ fn install_keys(window: &adw::ApplicationWindow, shell: &Rc<RefCell<Shell>>) {
     keys.connect_key_pressed(move |_, key, _, state| {
         if shell.borrow().consent_open.get() {
             return glib::Propagation::Proceed;
+        }
+        if key == gtk::gdk::Key::Escape && shell.borrow().bar_focus.is_some() {
+            shell.borrow_mut().bar_focus = None;
+            schedule(&shell);
+            return glib::Propagation::Stop;
         }
         if state.contains(gtk::gdk::ModifierType::ALT_MASK) {
             if let Some(index) = alt_index(key) {
@@ -733,39 +779,26 @@ fn forecast_page(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
     page.append(&lead);
     let today = chrono::Utc::now().date_naive();
     let items = shell.borrow().core.forecast(today).unwrap_or_default();
-    let card = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    card.add_css_class("bf-card");
-    if items.is_empty() {
-        let empty = gtk::Label::new(Some("Nothing to buy again yet."));
-        empty.add_css_class("bf-muted");
-        empty.set_xalign(0.0);
-        card.append(&empty);
-        page.append(&card);
-        return page;
-    }
-    for item in items {
-        let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        row.add_css_class("bf-row");
-        let status = match item.status {
-            ForecastStatus::Overdue => "overdue",
-            ForecastStatus::DueToday => "due today",
-            ForecastStatus::DueSoon => "due soon",
-            ForecastStatus::Upcoming => "upcoming",
-        };
-        let label = gtk::Label::new(Some(&format!(
-            "{}   ·   {}   ·   {status}   ·   {}   ·   likely {}",
-            item.name,
-            store_label(item.store),
-            item.next_purchase,
-            item.likely
-        )));
-        label.set_hexpand(true);
-        label.set_xalign(0.0);
-        label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        row.append(&label);
-        card.append(&row);
-    }
-    page.append(&card);
+    let products: Vec<Prod> = items
+        .into_iter()
+        .map(|item| {
+            let last = parse_date(&item.last_purchase).unwrap_or(today);
+            let gap = item.median_interval_days.round() as i64;
+            let steps = item.purchases.saturating_sub(1) as i64;
+            Prod {
+                name: item.name,
+                times: item.purchases as usize,
+                qty: item.purchases as f64,
+                spent: item.typical_unit_price * item.purchases as f64,
+                first: last - Duration::days(gap.max(0) * steps.max(0)),
+                last,
+                first_price: item.typical_unit_price,
+                last_price: item.typical_unit_price,
+                likely: item.likely,
+            }
+        })
+        .collect();
+    page.append(&product_table(shell, &products, true));
     page
 }
 
@@ -812,6 +845,9 @@ fn board(shell: &Rc<RefCell<Shell>>, purchases: bool) -> gtk::Box {
     dash.append(&top);
 
     let view = load_view(shell);
+    if shell.borrow().bar_focus.is_some() {
+        dash.add_css_class("is-focus");
+    }
     if purchases {
         let kpis = gtk::Box::new(gtk::Orientation::Horizontal, 16);
         kpis.append(&kpi(&format!("AED {:.0}", view.total), "SPENT"));
@@ -847,7 +883,7 @@ fn board(shell: &Rc<RefCell<Shell>>, purchases: bool) -> gtk::Box {
     avg.append(&delta);
     avg.append(&fine);
     dash.append(&avg);
-    dash.append(&bars(&view.buckets));
+    dash.append(&spend_bars(shell, &view.buckets));
     page.append(&dash);
 
     if !purchases {
@@ -868,7 +904,10 @@ fn grain_row(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
         let button = chip(label, shell.borrow().grain == grain);
         let shell_click = shell.clone();
         button.connect_clicked(move |_| {
-            shell_click.borrow_mut().grain = grain;
+            let mut shell = shell_click.borrow_mut();
+            shell.grain = grain;
+            shell.bar_focus = None;
+            drop(shell);
             schedule(&shell_click);
         });
         row.append(&button);
@@ -897,6 +936,7 @@ fn range_row(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
             let mut shell = shell_click.borrow_mut();
             shell.range_days = len;
             shell.custom = false;
+            shell.bar_focus = None;
             drop(shell);
             schedule(&shell_click);
         });
@@ -924,6 +964,7 @@ fn date_row(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
         shell.custom_end = end_c.text().trim().to_string();
         shell.custom = NaiveDate::parse_from_str(&shell.custom_start, "%Y-%m-%d").is_ok()
             && NaiveDate::parse_from_str(&shell.custom_end, "%Y-%m-%d").is_ok();
+        shell.bar_focus = None;
         drop(shell);
         schedule(&shell_click);
     });
@@ -969,6 +1010,85 @@ fn bars(buckets: &[(String, f64)]) -> gtk::Widget {
         col.append(&track);
         if wide {
             let caption = gtk::Label::new(Some(label));
+            caption.add_css_class("bf-muted");
+            caption.set_xalign(0.5);
+            col.append(&caption);
+        }
+        row.append(&col);
+    }
+    let scroll = gtk::ScrolledWindow::builder()
+        .child(&row)
+        .hscrollbar_policy(gtk::PolicyType::Automatic)
+        .vscrollbar_policy(gtk::PolicyType::Never)
+        .min_content_height(140)
+        .propagate_natural_height(true)
+        .build();
+    scroll.upcast()
+}
+
+fn spend_bars(shell: &Rc<RefCell<Shell>>, buckets: &[SpendBucket]) -> gtk::Widget {
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 3);
+    row.set_halign(gtk::Align::Start);
+    row.set_size_request(-1, 128);
+    let max = buckets
+        .iter()
+        .fold(0.0_f64, |acc, bucket| acc.max(bucket.amount));
+    let wide = buckets.len() <= 16;
+    let bar_width = if wide { 22 } else { 9 };
+    let focus = shell.borrow().bar_focus.clone();
+    for bucket in buckets {
+        let track = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        track.set_size_request(bar_width, 110);
+        let spacer = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        spacer.set_vexpand(true);
+        let fill = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        fill.add_css_class("bf-bar-fill");
+        fill.set_hexpand(true);
+        let height = if max <= 0.0 {
+            0
+        } else {
+            ((bucket.amount / max) * 110.0).round().clamp(0.0, 110.0) as i32
+        };
+        if height > 0 {
+            fill.set_height_request(height.max(2));
+        }
+        track.append(&spacer);
+        track.append(&fill);
+        let button = gtk::Button::new();
+        button.set_child(Some(&track));
+        button.add_css_class("bf-bar");
+        button.set_size_request(bar_width, 110);
+        if focus.as_deref() == Some(bucket.key.as_str()) {
+            button.add_css_class("focus");
+        }
+        button.set_tooltip_text(Some(&format!(
+            "{} · AED {:.2}",
+            bucket.label, bucket.amount
+        )));
+        let hit = gtk::GestureClick::new();
+        hit.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let flag = shell.borrow().bar_hit.clone();
+        hit.connect_pressed(move |_, _, _, _| {
+            flag.set(true);
+        });
+        button.add_controller(hit);
+        let shell_click = shell.clone();
+        let key = bucket.key.clone();
+        button.connect_clicked(move |_| {
+            let mut state = shell_click.borrow_mut();
+            if state.bar_focus.as_deref() == Some(key.as_str()) {
+                state.bar_focus = None;
+            } else {
+                state.bar_focus = Some(key.clone());
+            }
+            drop(state);
+            schedule(&shell_click);
+        });
+        let col = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        col.set_hexpand(false);
+        col.append(&button);
+        if wide {
+            let caption = gtk::Label::new(Some(&bucket.label));
             caption.add_css_class("bf-muted");
             caption.set_xalign(0.5);
             col.append(&caption);
@@ -1065,7 +1185,7 @@ fn product_table(shell: &Rc<RefCell<Shell>>, products: &[Prod], full: bool) -> g
             120,
             false,
         ));
-        head.append(&sort_header(shell, "Likely", SortKey::Likely, 64, true));
+        head.append(&sort_header(shell, "Likely", SortKey::Likely, 120, true));
     }
     head.append(&sort_header(shell, "Spent", SortKey::Spent, 110, true));
     card.append(&head);
@@ -1099,13 +1219,17 @@ fn product_table(shell: &Rc<RefCell<Shell>>, products: &[Prod], full: bool) -> g
         if full {
             row.append(&cell(&qty_text(product.qty), 72, true));
             row.append(&cell(&frequency_label(product), 120, false));
-            row.append(&cell(&product.likely.to_string(), 64, true));
+            row.append(&likely_votes(shell, &product.name, product.likely));
         }
         row.append(&cell(&format!("AED {:.2}", product.spent), 110, true));
         let click = gtk::GestureClick::new();
         let shell_click = shell.clone();
         let product_name = product.name.clone();
+        let guard = shell.borrow().vote_guard.clone();
         click.connect_released(move |_, _, _, _| {
+            if guard.replace(false) {
+                return;
+            }
             let mut shell = shell_click.borrow_mut();
             shell.compare_for.clear();
             shell.page = Page::Product(product_name.clone());
@@ -1167,21 +1291,7 @@ fn store_card(
     pill.add_css_class("on");
     name_row.append(&name);
     name_row.append(&pill);
-    let status = if linked {
-        let text = match username {
-            Some(user) if !user.is_empty() => format!("Linked · {user}"),
-            _ => "Linked".into(),
-        };
-        let label = gtk::Label::new(Some(&text));
-        label.add_css_class("bf-ok");
-        label.set_xalign(0.0);
-        label
-    } else {
-        let label = gtk::Label::new(Some("Not linked"));
-        label.add_css_class("bf-muted");
-        label.set_xalign(0.0);
-        label
-    };
+    let status = store_status(id, linked, username);
     text.append(&name_row);
     text.append(&status);
     head.append(&logo);
@@ -1202,15 +1312,37 @@ fn store_card(
     card
 }
 
+fn store_status(id: StoreId, linked: bool, username: Option<String>) -> gtk::Label {
+    let (text, ok) = if linked {
+        let text = match username {
+            Some(user) if !user.is_empty() => format!("Linked · {user}"),
+            _ => "Linked".into(),
+        };
+        (text, true)
+    } else if let Some(domain) = id.mail_domain() {
+        (format!("Mail · {domain}"), false)
+    } else if id.receipts() && !id.login() {
+        ("Invoices by mail".into(), false)
+    } else if id.login() {
+        ("Not linked".into(), false)
+    } else {
+        ("Search only".into(), false)
+    };
+    let label = gtk::Label::new(Some(&text));
+    label.add_css_class(if ok { "bf-ok" } else { "bf-muted" });
+    label.set_xalign(0.0);
+    label
+}
+
 fn caps_row(id: StoreId, linked: bool) -> gtk::Box {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
     for (label, on) in [
-        ("SEARCH", true),
-        ("COMPARE", true),
-        ("CART", true),
+        ("SEARCH", id.search()),
+        ("COMPARE", id.search()),
+        ("CART", id.search()),
         ("CHECKOUT", id.remote_checkout()),
-        ("RECEIPTS", true),
-        ("LOGIN", linked),
+        ("RECEIPTS", id.receipts()),
+        ("LOGIN", id.login() && linked),
     ] {
         let cap = gtk::Label::new(Some(label));
         cap.add_css_class("bf-cap");
@@ -1246,6 +1378,17 @@ fn store_page(shell: &Rc<RefCell<Shell>>, id: StoreId) -> gtk::Box {
     head.append(&title);
     page.append(&head);
     page.append(&caps_row(id, linked));
+
+    if !id.login() {
+        let note = gtk::Label::new(Some(
+            "Invoices arrive by mail. This store has no catalog and no sign-in.",
+        ));
+        note.add_css_class("bf-muted");
+        note.set_xalign(0.0);
+        wrap_label(&note);
+        page.append(&note);
+        return page;
+    }
 
     let form = gtk::Box::new(gtk::Orientation::Vertical, 8);
     form.add_css_class("bf-card");
@@ -1565,7 +1708,7 @@ fn product_page(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
             "LAST",
         ));
         stats.append(&kpi(&item.frequency, "FREQUENCY"));
-        stats.append(&kpi(&item.likely.to_string(), "LIKELY"));
+        stats.append(&likely_kpi(shell, &name, item.likely));
         stats.append(&kpi(
             if item.next.is_empty() {
                 "—"
@@ -2387,13 +2530,21 @@ fn receipt_page(shell: &Rc<RefCell<Shell>>, id: i64) -> gtk::Box {
     page
 }
 
+struct SpendBucket {
+    key: String,
+    label: String,
+    amount: f64,
+    start: NaiveDate,
+    end: NaiveDate,
+}
+
 struct ViewData {
     start: NaiveDate,
     end: NaiveDate,
     total: f64,
     average: f64,
     receipts: usize,
-    buckets: Vec<(String, f64)>,
+    buckets: Vec<SpendBucket>,
     products: Vec<Prod>,
 }
 
@@ -2403,6 +2554,7 @@ fn load_view(shell: &Rc<RefCell<Shell>>) -> ViewData {
     let invoices = shell_ref.core.list_invoices().unwrap_or_default();
     let (start, end) = window_for(&shell_ref, &invoices, today);
     let grain = shell_ref.grain;
+    let focus = shell_ref.bar_focus.clone();
     let sort = shell_ref.sort;
     let sort_desc = shell_ref.sort_desc;
     let shortage = shell_ref.shortage;
@@ -2425,13 +2577,37 @@ fn load_view(shell: &Rc<RefCell<Shell>>) -> ViewData {
     }
     let buckets = match grain {
         Grain::Daily => daily_buckets(start, end, &by_day),
-        Grain::Weekly => span_buckets(start, end, &by_day, 7, "W"),
+        Grain::Weekly => week_buckets(start, end, &by_day),
         Grain::Monthly => month_buckets(start, end, &by_day),
         Grain::Yearly => year_buckets(start, end, &by_day),
     };
-    let total: f64 = buckets.iter().map(|(_, n)| n).sum();
-    let periods = buckets.len().max(1) as f64;
-    let mut products = products_from(&filtered, &likely, sort, sort_desc);
+    let focus_span = focus.as_ref().and_then(|key| {
+        buckets
+            .iter()
+            .find(|bucket| &bucket.key == key)
+            .map(|bucket| (bucket.start, bucket.end))
+    });
+    if focus.is_some() && focus_span.is_none() {
+        shell.borrow_mut().bar_focus = None;
+    }
+    let shown: Vec<&InvoiceSummary> = if let Some((from, to)) = focus_span {
+        filtered
+            .into_iter()
+            .filter(|invoice| {
+                parse_date(&invoice.purchased_on).is_some_and(|date| date >= from && date <= to)
+            })
+            .collect()
+    } else {
+        filtered
+    };
+    let total: f64 = shown.iter().map(|invoice| invoice.total).sum();
+    let periods = if focus_span.is_some() {
+        1.0
+    } else {
+        buckets.len().max(1) as f64
+    };
+    let (start, end) = focus_span.unwrap_or((start, end));
+    let mut products = products_from(&shown, &likely, sort, sort_desc);
     if shortage {
         products.retain(|product| is_shortage(product, today));
     }
@@ -2440,7 +2616,7 @@ fn load_view(shell: &Rc<RefCell<Shell>>) -> ViewData {
         end,
         total,
         average: total / periods,
-        receipts: filtered.len(),
+        receipts: shown.len(),
         buckets,
         products,
     }
@@ -2484,18 +2660,35 @@ fn window_for(
     (today - Duration::days(shell.range_days - 1), today)
 }
 
+fn sum_days(from: NaiveDate, to: NaiveDate, by_day: &HashMap<NaiveDate, f64>) -> f64 {
+    let mut sum = 0.0;
+    let mut day = from;
+    while day <= to {
+        sum += by_day.get(&day).copied().unwrap_or(0.0);
+        day += Duration::days(1);
+    }
+    sum
+}
+
+fn monday_of(day: NaiveDate) -> NaiveDate {
+    day - Duration::days(day.weekday().num_days_from_monday() as i64)
+}
+
 fn daily_buckets(
     start: NaiveDate,
     end: NaiveDate,
     by_day: &HashMap<NaiveDate, f64>,
-) -> Vec<(String, f64)> {
+) -> Vec<SpendBucket> {
     let mut out = Vec::new();
     let mut cursor = start;
     while cursor <= end {
-        out.push((
-            cursor.format("%m-%d").to_string(),
-            by_day.get(&cursor).copied().unwrap_or(0.0),
-        ));
+        out.push(SpendBucket {
+            key: format!("day:{}", cursor.format("%Y-%m-%d")),
+            label: cursor.format("%m-%d").to_string(),
+            amount: by_day.get(&cursor).copied().unwrap_or(0.0),
+            start: cursor,
+            end: cursor,
+        });
         cursor += Duration::days(1);
         if out.len() > 400 {
             break;
@@ -2504,27 +2697,27 @@ fn daily_buckets(
     out
 }
 
-fn span_buckets(
+fn week_buckets(
     start: NaiveDate,
     end: NaiveDate,
     by_day: &HashMap<NaiveDate, f64>,
-    days: i64,
-    prefix: &str,
-) -> Vec<(String, f64)> {
+) -> Vec<SpendBucket> {
     let mut out = Vec::new();
-    let mut cursor = start;
-    let mut index = 1;
+    let mut cursor = monday_of(start);
     while cursor <= end {
-        let stop = (cursor + Duration::days(days - 1)).min(end);
-        let mut sum = 0.0;
-        let mut day = cursor;
-        while day <= stop {
-            sum += by_day.get(&day).copied().unwrap_or(0.0);
-            day += Duration::days(1);
+        let week_end = cursor + Duration::days(6);
+        let from = cursor.max(start);
+        let to = week_end.min(end);
+        if from <= to {
+            out.push(SpendBucket {
+                key: format!("week:{}", cursor.format("%Y-%m-%d")),
+                label: cursor.format("%m-%d").to_string(),
+                amount: sum_days(from, to, by_day),
+                start: from,
+                end: to,
+            });
         }
-        out.push((format!("{prefix}{index}"), sum));
-        index += 1;
-        cursor = stop + Duration::days(1);
+        cursor += Duration::days(7);
     }
     out
 }
@@ -2533,22 +2726,31 @@ fn month_buckets(
     start: NaiveDate,
     end: NaiveDate,
     by_day: &HashMap<NaiveDate, f64>,
-) -> Vec<(String, f64)> {
-    let mut out: Vec<(String, f64)> = Vec::new();
-    let mut cursor = start;
+) -> Vec<SpendBucket> {
+    let mut out = Vec::new();
+    let mut cursor = NaiveDate::from_ymd_opt(start.year(), start.month(), 1).unwrap_or(start);
     while cursor <= end {
-        let key = cursor.format("%Y-%m").to_string();
-        let add = by_day.get(&cursor).copied().unwrap_or(0.0);
-        if let Some(last) = out.last_mut() {
-            if last.0 == key {
-                last.1 += add;
-            } else {
-                out.push((key, add));
-            }
+        let next = if cursor.month() == 12 {
+            NaiveDate::from_ymd_opt(cursor.year() + 1, 1, 1)
         } else {
-            out.push((key, add));
+            NaiveDate::from_ymd_opt(cursor.year(), cursor.month() + 1, 1)
+        };
+        let Some(next) = next else {
+            break;
+        };
+        let month_end = next - Duration::days(1);
+        let from = cursor.max(start);
+        let to = month_end.min(end);
+        if from <= to {
+            out.push(SpendBucket {
+                key: format!("month:{}", cursor.format("%Y-%m")),
+                label: cursor.format("%Y-%m").to_string(),
+                amount: sum_days(from, to, by_day),
+                start: from,
+                end: to,
+            });
         }
-        cursor += Duration::days(1);
+        cursor = next;
     }
     out
 }
@@ -2557,22 +2759,26 @@ fn year_buckets(
     start: NaiveDate,
     end: NaiveDate,
     by_day: &HashMap<NaiveDate, f64>,
-) -> Vec<(String, f64)> {
-    let mut out: Vec<(String, f64)> = Vec::new();
-    let mut cursor = start;
+) -> Vec<SpendBucket> {
+    let mut out = Vec::new();
+    let mut cursor = NaiveDate::from_ymd_opt(start.year(), 1, 1).unwrap_or(start);
     while cursor <= end {
-        let key = cursor.format("%Y").to_string();
-        let add = by_day.get(&cursor).copied().unwrap_or(0.0);
-        if let Some(last) = out.last_mut() {
-            if last.0 == key {
-                last.1 += add;
-            } else {
-                out.push((key, add));
-            }
-        } else {
-            out.push((key, add));
+        let Some(next) = NaiveDate::from_ymd_opt(cursor.year() + 1, 1, 1) else {
+            break;
+        };
+        let year_end = next - Duration::days(1);
+        let from = cursor.max(start);
+        let to = year_end.min(end);
+        if from <= to {
+            out.push(SpendBucket {
+                key: format!("year:{}", cursor.format("%Y")),
+                label: cursor.format("%Y").to_string(),
+                amount: sum_days(from, to, by_day),
+                start: from,
+                end: to,
+            });
         }
-        cursor += Duration::days(1);
+        cursor = next;
     }
     out
 }
@@ -2706,6 +2912,60 @@ fn heading_mark(before: &str, word: &str) -> gtk::Label {
     );
     label.set_markup(&markup);
     label
+}
+
+fn likely_kpi(shell: &Rc<RefCell<Shell>>, name: &str, likely: u8) -> gtk::Box {
+    let box_ = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    box_.append(&likely_votes(shell, name, likely));
+    let caption = gtk::Label::new(Some("LIKELY"));
+    caption.add_css_class("bf-kicker");
+    caption.set_xalign(0.0);
+    box_.append(&caption);
+    box_
+}
+
+fn likely_votes(shell: &Rc<RefCell<Shell>>, name: &str, likely: u8) -> gtk::Box {
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 2);
+    row.set_halign(gtk::Align::End);
+    row.set_width_request(120);
+    let value = gtk::Label::new(Some(&likely.to_string()));
+    value.add_css_class("bf-brand");
+    value.set_xalign(1.0);
+    value.set_width_request(36);
+    row.append(&value);
+    row.append(&vote_button(shell, name, 1));
+    row.append(&vote_button(shell, name, -1));
+    row
+}
+
+fn vote_button(shell: &Rc<RefCell<Shell>>, name: &str, delta: i32) -> gtk::Button {
+    let button = gtk::Button::with_label(if delta > 0 { "▲" } else { "▼" });
+    button.add_css_class("bf-vote");
+    button.set_tooltip_text(Some(if delta > 0 {
+        "More likely to buy"
+    } else {
+        "Less likely to buy"
+    }));
+    let press = gtk::GestureClick::new();
+    press.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let guard = shell.borrow().vote_guard.clone();
+    press.connect_pressed(move |_, _, _, _| {
+        guard.set(true);
+    });
+    button.add_controller(press);
+    let shell_click = shell.clone();
+    let name = name.to_string();
+    button.connect_clicked(move |_| {
+        if let Err(err) = shell_click.borrow().core.nudge_vote(&name, delta) {
+            shell_click
+                .borrow()
+                .toast
+                .add_toast(adw::Toast::new(&err.to_string()));
+            return;
+        }
+        schedule(&shell_click);
+    });
+    button
 }
 
 fn kpi(value: &str, caption: &str) -> gtk::Box {
@@ -2886,7 +3146,11 @@ fn store_label(id: StoreId) -> &'static str {
         StoreId::Waitrose => "Waitrose UAE",
         StoreId::Spinneys => "Spinneys UAE",
         StoreId::Mmi => "MMI",
-        StoreId::AfricanEastern => "African & Eastern",
+        StoreId::AfricanEastern => "African + Eastern",
+        StoreId::Careem => "Careem",
+        StoreId::Mcdonalds => "McDonald's",
+        StoreId::AmazonIt => "Amazon.it",
+        StoreId::AmazonAe => "Amazon.ae",
     }
 }
 
@@ -2924,6 +3188,9 @@ fn logo_png(id: StoreId) -> &'static [u8] {
         StoreId::Spinneys => include_bytes!("../../../assets/logos/spinneys.png"),
         StoreId::Mmi => include_bytes!("../../../assets/logos/mmi.png"),
         StoreId::AfricanEastern => include_bytes!("../../../assets/logos/africaneastern.png"),
+        StoreId::Careem => include_bytes!("../../../assets/logos/careem.png"),
+        StoreId::Mcdonalds => include_bytes!("../../../assets/logos/mcdonalds.png"),
+        StoreId::AmazonIt | StoreId::AmazonAe => include_bytes!("../../../assets/logos/amazon.png"),
     }
 }
 
@@ -2936,6 +3203,10 @@ fn store_mark(id: StoreId) -> &'static str {
         StoreId::Spinneys => "S",
         StoreId::Mmi => "M",
         StoreId::AfricanEastern => "A",
+        StoreId::Careem => "C",
+        StoreId::Mcdonalds => "M",
+        StoreId::AmazonIt => "it",
+        StoreId::AmazonAe => "ae",
     }
 }
 
@@ -2948,22 +3219,56 @@ fn logo_class(id: StoreId) -> &'static str {
         StoreId::Spinneys => "logo-spinneys",
         StoreId::Mmi => "logo-mmi",
         StoreId::AfricanEastern => "logo-african",
+        StoreId::Careem => "logo-careem",
+        StoreId::Mcdonalds => "logo-mcdonalds",
+        StoreId::AmazonIt | StoreId::AmazonAe => "logo-amazon",
     }
 }
 
-fn initial_page() -> Page {
+fn initial_page(core: &App) -> Page {
     let product = std::env::var("OMABRING_PRODUCT").ok();
-    startup_page(
+    let page = startup_page(
         std::env::var("OMABRING_PAGE").ok().as_deref(),
         product.as_deref(),
-    )
+    );
+    if matches!(page, Page::Product(_)) {
+        return page;
+    }
+    let page_chosen = std::env::var("OMABRING_PAGE")
+        .ok()
+        .is_some_and(|value| !value.trim().is_empty());
+    if !page_chosen && chart_from(std::env::var("OMABRING_CHART").ok().as_deref()).is_some() {
+        let name = latest_product_name(core).unwrap_or_else(|| "Milk".into());
+        return Page::Product(name);
+    }
+    page
+}
+
+fn latest_product_name(core: &App) -> Option<String> {
+    let invoices = core.list_invoices().ok()?;
+    let mut best: Option<(String, String)> = None;
+    for invoice in invoices {
+        for line in invoice.lines {
+            let replace = best
+                .as_ref()
+                .map(|(date, _)| invoice.purchased_on.as_str() >= date.as_str())
+                .unwrap_or(true);
+            if replace {
+                best = Some((invoice.purchased_on.clone(), line.name));
+            }
+        }
+    }
+    best.map(|(_, name)| name)
 }
 
 fn startup_page(page: Option<&str>, product: Option<&str>) -> Page {
     if let Some(name) = product.map(str::trim).filter(|name| !name.is_empty()) {
         return Page::Product(name.to_string());
     }
-    page_from(page)
+    if page.map(str::trim).is_some_and(|value| !value.is_empty()) {
+        return page_from(page);
+    }
+    Page::Dashboard
 }
 
 fn seed_demo(core: &App) {
@@ -3075,8 +3380,8 @@ fn poll_consent(shell: &Rc<RefCell<Shell>>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        alt_index, chart_buckets, nav_slot, page_at, page_from, products_from, startup_page,
-        ChartKind, Page, SortKey,
+        alt_index, chart_buckets, chart_from, nav_slot, page_at, page_from, products_from,
+        startup_page, week_buckets, ChartKind, Page, SortKey,
     };
     use omabring_core::{InvoiceLine, InvoiceSummary, StoreId};
     use std::collections::HashMap;
@@ -3092,6 +3397,45 @@ mod tests {
             startup_page(Some("dashboard"), Some(" Full Fat Milk ")),
             Page::Product(name) if name == "Full Fat Milk"
         ));
+    }
+
+    #[test]
+    fn every_tab_and_chart_has_a_startup_name() {
+        assert!(matches!(page_from(Some("Dashboard")), Page::Dashboard));
+        assert!(matches!(page_from(Some("purchases")), Page::Purchases));
+        assert!(matches!(page_from(Some("STORES")), Page::Stores));
+        assert!(matches!(page_from(Some("search")), Page::Search));
+        assert!(matches!(page_from(Some("forecast")), Page::Forecast));
+        assert!(matches!(page_from(Some("settings")), Page::Settings));
+        assert_eq!(chart_from(Some("price")), Some(ChartKind::Price));
+        assert_eq!(
+            chart_from(Some("price-by-store")),
+            Some(ChartKind::PriceByStore)
+        );
+        assert_eq!(chart_from(Some("qty-month")), Some(ChartKind::QtyMonth));
+        assert_eq!(chart_from(Some("spend-month")), Some(ChartKind::SpendMonth));
+        assert_eq!(chart_from(Some("spend-year")), Some(ChartKind::SpendYear));
+        assert_eq!(
+            chart_from(Some("store-compare")),
+            Some(ChartKind::StoreCompare)
+        );
+        assert_eq!(chart_from(Some("cumulative")), Some(ChartKind::Cumulative));
+        assert_eq!(chart_from(Some("nope")), None);
+    }
+
+    #[test]
+    fn weekly_bars_start_on_monday() {
+        use chrono::NaiveDate;
+        let start = NaiveDate::from_ymd_opt(2026, 10, 14).unwrap();
+        let end = NaiveDate::from_ymd_opt(2026, 10, 16).unwrap();
+        let mut by_day = HashMap::new();
+        by_day.insert(start, 4.0);
+        let buckets = week_buckets(start, end, &by_day);
+        assert_eq!(buckets.len(), 1);
+        assert_eq!(buckets[0].key, "week:2026-10-12");
+        assert_eq!(buckets[0].start, start);
+        assert_eq!(buckets[0].end, end);
+        assert!((buckets[0].amount - 4.0).abs() < 0.01);
     }
 
     #[test]

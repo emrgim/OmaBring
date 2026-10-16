@@ -26,6 +26,9 @@ pub struct Palette {
     pub border: String,
     pub accent_fg: String,
     pub font: String,
+    /// Window corner radius from the theme's Hyprland `rounding`. Inner
+    /// widgets stay square. Zero when the theme does not set one.
+    pub rounding: u32,
 }
 
 #[derive(Default)]
@@ -133,6 +136,7 @@ impl RawColors {
             border,
             accent_fg,
             font: DEFAULT_FONT.into(),
+            rounding: 0,
         })
     }
 }
@@ -156,6 +160,7 @@ impl Palette {
             border: "#313244".into(),
             accent_fg: readable_fg("#89b4fa", "#1e1e2e", "#cdd6f4"),
             font: DEFAULT_FONT.into(),
+            rounding: 0,
         }
     }
 
@@ -185,6 +190,7 @@ fn render_sheet(palette: &Palette) -> String {
         .replace("{{ darker_background }}", &palette.darker_background)
         .replace("{{ lighter_background }}", &palette.lighter_background)
         .replace("{{ border }}", &palette.border)
+        .replace("{{ rounding }}", &palette.rounding.to_string())
         .replace("{{ red }}", &palette.red)
         .replace("{{ green }}", &palette.green)
         .replace("{{ yellow }}", &palette.yellow)
@@ -209,14 +215,17 @@ pub fn active_stylesheet(home: &Path) -> String {
 }
 
 fn window_palette(home: &Path) -> Palette {
-    let palette = load_active_palette(home);
+    let mut palette = load_active_palette(home);
     let Some(dir) = resolve_theme_dir(home) else {
         return palette;
     };
-    let Ok(text) = fs::read_to_string(dir.join("omabring.css")) else {
-        return palette;
-    };
-    apply_omabring_css(&text, palette)
+    if let Ok(text) = fs::read_to_string(dir.join("omabring.css")) {
+        palette = apply_omabring_css(&text, palette);
+    }
+    // The compositor draws `col.active_border`. Apply it after the color
+    // sheet so a rendered omabring.css cannot put a second border color in
+    // front of the theme outline.
+    with_hyprland(palette, &dir)
 }
 
 fn apply_omabring_css(text: &str, mut palette: Palette) -> Palette {
@@ -466,7 +475,66 @@ fn load_palette_dir(dir: &Path) -> Option<Palette> {
     if raw.mode.is_none() && dir.join("light.mode").is_file() {
         raw.mode = Some("light".into());
     }
-    raw.finish()
+    raw.finish().map(|palette| with_hyprland(palette, dir))
+}
+
+/// `col.active_border` and `rounding` from the theme's Hyprland config.
+/// The window itself stays unframed; these values are the outline the
+/// compositor already draws, and the matching corner radius.
+fn with_hyprland(mut palette: Palette, dir: &Path) -> Palette {
+    for name in ["hyprland.conf", "hypr/hyprland.conf"] {
+        let Ok(text) = fs::read_to_string(dir.join(name)) else {
+            continue;
+        };
+        let (color, rounding) = parse_hyprland(&text);
+        if let Some(color) = color {
+            palette.border = color;
+        }
+        if let Some(rounding) = rounding {
+            palette.rounding = rounding;
+        }
+    }
+    palette
+}
+
+fn parse_hyprland(text: &str) -> (Option<String>, Option<u32>) {
+    let mut color = None;
+    let mut rounding = None;
+    for line in text.lines() {
+        let line = line.split('#').next().unwrap_or("").trim();
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let key = key.trim();
+        let value = value.trim();
+        if key == "rounding" || key.ends_with(".rounding") {
+            if let Some(number) = value
+                .split_whitespace()
+                .next()
+                .and_then(|token| token.parse().ok())
+            {
+                rounding = Some(number);
+            }
+        }
+        if key == "col.active_border" || key.ends_with("active_border") {
+            if let Some(parsed) = hypr_color(value) {
+                color = Some(parsed);
+            }
+        }
+    }
+    (color, rounding)
+}
+
+fn hypr_color(value: &str) -> Option<String> {
+    let lower = value.to_ascii_lowercase();
+    let pos = lower.find("rgba(").or_else(|| lower.find("rgb("))?;
+    let rest = &value[pos..];
+    let inner = rest.split('(').nth(1)?.split(')').next()?;
+    let hex: String = inner.chars().filter(|c| c.is_ascii_hexdigit()).collect();
+    if hex.len() >= 6 {
+        return normalize_hex(&format!("#{}", &hex[..6]));
+    }
+    None
 }
 
 fn raw_from_file(path: &Path) -> Option<RawColors> {
@@ -1005,10 +1073,35 @@ blue = "#89b4fa"
         assert!(css.contains("background-color: var(--omabring-selection);"));
         assert!(css.contains("background-color: var(--omabring-bg);"));
         assert!(css.contains("border-radius: 0;"));
+        assert!(css.contains("border: none;"));
+        assert_eq!(palette.rounding, 0);
         assert!(
             css.contains("font-family: \"IBM Plex Mono\", \"JetBrainsMono Nerd Font\", monospace;")
         );
         assert!(css.contains("color: var(--omabring-accent);"));
+    }
+
+    #[test]
+    fn hyprland_active_border_sets_the_outline_color_and_rounding() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("colors.toml"),
+            "background = \"#111111\"\nforeground = \"#eeeeee\"\nborder = \"#222222\"\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("hyprland.conf"),
+            "general {\n    rounding = 8\n}\ndecoration {\n    col.active_border = rgba(ff00aaee) rgba(00ffaaee) 45deg\n}\n",
+        )
+        .unwrap();
+        let palette = load_palette_path(dir.path()).unwrap();
+        assert_eq!(palette.border, "#ff00aa");
+        assert_eq!(palette.rounding, 8);
+        let css = palette.to_css();
+        assert!(css.contains("--omabring-border: #ff00aa;"));
+        assert!(css.contains("border-radius: 8px;"));
+        assert!(css.contains("border: none;"));
+        assert!(css.contains("border-radius: 0;"));
     }
 
     #[test]

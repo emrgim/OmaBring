@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use chrono::{Datelike, NaiveDate};
 use rusqlite::{params, OptionalExtension};
 
@@ -177,6 +179,73 @@ impl App {
         })
     }
 
+    /// Stack a likely vote the way Bring Fast does: each click adds or
+    /// subtracts one, clamped to ±50. `up` and `down` from an older import
+    /// count as ±1.
+    pub fn nudge_vote(&self, name: &str, delta: i32) -> Result<i32> {
+        let key = normalize_name(name);
+        if key.is_empty() {
+            return Err(Error::Message("product name is required".into()));
+        }
+        self.with_conn(|conn| {
+            let found: Option<(String, String)> = conn
+                .query_row(
+                    "SELECT product_key, vote FROM shopping_list
+                     WHERE product_key = ?1 OR lower(name) = lower(?2)
+                     ORDER BY CASE WHEN product_key = ?1 THEN 0 ELSE 1 END
+                     LIMIT 1",
+                    params![key, name.trim()],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?;
+            let next = match found {
+                Some((product_key, vote)) => {
+                    let next = (parse_vote(&vote) + delta).clamp(-50, 50);
+                    conn.execute(
+                        "UPDATE shopping_list SET vote = ?1 WHERE product_key = ?2",
+                        params![next.to_string(), product_key],
+                    )?;
+                    next
+                }
+                None => {
+                    let next = delta.clamp(-50, 50);
+                    conn.execute(
+                        "INSERT INTO shopping_list (product_key, name, vote, excluded) VALUES (?1, ?2, ?3, 0)",
+                        params![key, name.trim(), next.to_string()],
+                    )?;
+                    next
+                }
+            };
+            Ok(next)
+        })
+    }
+
+    pub(crate) fn vote_index(&self) -> Result<HashMap<String, i32>> {
+        self.with_conn(|conn| {
+            let mut stmt = conn.prepare("SELECT product_key, name, vote FROM shopping_list")?;
+            let rows = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?;
+            let mut map = HashMap::new();
+            for row in rows {
+                let (key, name, vote) = row?;
+                let push = parse_vote(&vote);
+                if !key.is_empty() {
+                    map.insert(key, push);
+                }
+                let name_key = normalize_name(&name);
+                if !name_key.is_empty() {
+                    map.entry(name_key).or_insert(push);
+                }
+            }
+            Ok(map)
+        })
+    }
+
     pub fn forecast(&self, today: NaiveDate) -> Result<Vec<ForecastItem>> {
         let invoices = self.list_invoices()?;
         #[derive(Clone)]
@@ -217,6 +286,7 @@ impl App {
                 }
             }
         }
+        let votes = self.vote_index().unwrap_or_default();
         let mut items = Vec::new();
         for (_key, store, currency, name, mut samples) in groups {
             samples.sort_by_key(|sample| sample.date);
@@ -258,6 +328,8 @@ impl App {
                 .last()
                 .map(|sample| sample.unit.clone())
                 .unwrap_or_else(|| "piece".into());
+            let score = likely_score(days_until, median_days, &intervals);
+            let push = votes.get(&normalize_name(&name)).copied().unwrap_or(0);
             items.push(ForecastItem {
                 name,
                 store,
@@ -268,7 +340,7 @@ impl App {
                 next_purchase: next.format("%Y-%m-%d").to_string(),
                 days_until,
                 status,
-                likely: likely_score(days_until, median_days, &intervals),
+                likely: apply_likely_vote(score, push),
                 typical_unit_price: round_money(median(&prices)),
                 unit,
             });
@@ -384,6 +456,9 @@ impl App {
         let mut notes = Vec::new();
         let mut jobs = Vec::new();
         for store in StoreId::all() {
+            if !store.search() {
+                continue;
+            }
             let secrets = self.secrets_for(store)?.unwrap_or_else(StoreSecrets::blank);
             let linked = !secrets.username.trim().is_empty();
             jobs.push((store, secrets, linked));
@@ -972,6 +1047,31 @@ fn median(values: &[f64]) -> f64 {
     }
 }
 
+pub(crate) fn apply_likely_vote(score: u8, push: i32) -> u8 {
+    let push = push.clamp(-50, 50);
+    if push > 0 {
+        let bump = 40 + 12 * (push - 1);
+        let floor = 55 + 12 * (push - 1);
+        (score as i32 + bump).max(floor).min(100) as u8
+    } else if push < 0 {
+        let factor = 0.2_f64.powi(-push);
+        (score as f64 * factor).round().clamp(0.0, 100.0) as u8
+    } else {
+        score
+    }
+}
+
+pub(crate) fn parse_vote(raw: &str) -> i32 {
+    let raw = raw.trim();
+    if raw.eq_ignore_ascii_case("up") {
+        return 1;
+    }
+    if raw.eq_ignore_ascii_case("down") {
+        return -1;
+    }
+    raw.parse::<i32>().unwrap_or(0).clamp(-50, 50)
+}
+
 fn likely_score(days_until: i64, median_days: f64, intervals: &[f64]) -> u8 {
     let mean = intervals.iter().sum::<f64>() / intervals.len() as f64;
     let variance = intervals
@@ -1155,6 +1255,23 @@ mod tests {
         assert_eq!(water.days_until, 0);
         assert_eq!(water.likely, 100);
         assert_eq!(water.status, ForecastStatus::DueToday);
+        assert_eq!(app.nudge_vote("Al Ain Water", -1).unwrap(), -1);
+        let voted = app.forecast(today).unwrap();
+        let water = voted
+            .iter()
+            .find(|item| item.store == StoreId::Carrefour)
+            .unwrap();
+        assert_eq!(water.likely, 20);
+        assert_eq!(app.nudge_vote("Al Ain Water", 1).unwrap(), 0);
+        assert_eq!(
+            app.forecast(today)
+                .unwrap()
+                .iter()
+                .find(|item| item.store == StoreId::Carrefour)
+                .unwrap()
+                .likely,
+            100
+        );
         let overdue = app
             .forecast(NaiveDate::from_ymd_opt(2026, 2, 5).unwrap())
             .unwrap();

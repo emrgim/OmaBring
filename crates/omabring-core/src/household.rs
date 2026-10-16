@@ -36,6 +36,7 @@ pub struct StorePrice {
 pub struct MissingImage {
     pub name: String,
     pub store: StoreId,
+    pub product_key: String,
 }
 
 #[derive(Debug, Clone)]
@@ -182,7 +183,7 @@ impl App {
     pub fn products_missing_images(&self) -> Result<Vec<MissingImage>> {
         self.with_conn(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT MIN(l.name), MIN(i.store)
+                "SELECT MIN(l.name), MIN(i.store), MAX(ifnull(l.product_key, ''))
                  FROM invoice_lines l
                  JOIN invoices i ON i.id = l.invoice_id
                  WHERE NOT EXISTS (
@@ -192,18 +193,73 @@ impl App {
                  ORDER BY MIN(l.name)",
             )?;
             let rows = stmt.query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
             })?;
             let mut out = Vec::new();
             for row in rows {
-                let (name, store) = row?;
+                let (name, store, product_key) = row?;
                 let Some(store) = StoreId::parse(&store) else {
                     continue;
                 };
-                out.push(MissingImage { name, store });
+                out.push(MissingImage {
+                    name,
+                    store,
+                    product_key,
+                });
             }
             Ok(out)
         })
+    }
+
+    /// Picture URLs already stored on products imported from Bring Fast.
+    pub fn stored_image_urls(&self) -> Result<std::collections::HashMap<String, Vec<String>>> {
+        self.with_conn(|conn| {
+            let mut map = std::collections::HashMap::new();
+            let mut stmt = conn.prepare(
+                "SELECT product_key, name, ifnull(image_url, '') FROM products WHERE ifnull(image_url, '') != ''",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?;
+            for row in rows {
+                let (key, name, url) = row?;
+                push_image_url(&mut map, &key, &url);
+                push_image_url(&mut map, &normalize_name(&name), &url);
+            }
+            Ok(map)
+        })
+    }
+
+    /// Copies a Bring Fast cache file or downloads a stored image URL.
+    pub fn adopt_product_image(
+        &self,
+        name: &str,
+        keys: &[String],
+        urls: &[String],
+        dirs: &[PathBuf],
+    ) -> Result<bool> {
+        if self.product_image(name).is_some() {
+            return Ok(true);
+        }
+        if let Some(bytes) = find_cached_image(keys, urls, dirs) {
+            self.store_product_image(name, &bytes)?;
+            return Ok(true);
+        }
+        for url in urls {
+            if let Some(bytes) = fetch_image(url) {
+                self.store_product_image(name, &bytes)?;
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// Downloads one catalog picture and stores it next to the other product images.
@@ -278,7 +334,18 @@ impl App {
             format!("every {:.0} days", every.max(0.0))
         };
         let today = Utc::now().date_naive();
-        let (likely, next) = likely_next(&points, today);
+        let (raw_likely, next) = likely_next(&points, today);
+        let push = self
+            .vote_index()
+            .ok()
+            .and_then(|votes| {
+                votes
+                    .get(&normalize_name(&display))
+                    .copied()
+                    .or_else(|| votes.get(&wanted).copied())
+            })
+            .unwrap_or(0);
+        let likely = crate::shopping::apply_likely_vote(raw_likely, push);
         let mut by_store: Vec<StorePrice> = Vec::new();
         for point in &points {
             if let Some(row) = by_store.iter_mut().find(|row| row.store == point.store) {
@@ -458,6 +525,74 @@ pub(crate) fn safe_key(key: &str) -> String {
     }
 }
 
+pub fn product_image_dirs(source: Option<&Path>, receipts: Option<&Path>) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    let mut push = |path: PathBuf| {
+        if path.is_dir() && !dirs.iter().any(|have| have == &path) {
+            dirs.push(path);
+        }
+    };
+    if let Some(source) = source {
+        if let Some(parent) = source.parent() {
+            push(parent.join("product-images"));
+        }
+    }
+    if let Some(receipts) = receipts {
+        push(receipts.join("product-images"));
+        if let Some(parent) = receipts.parent() {
+            push(parent.join("product-images"));
+        }
+    }
+    if let Ok(data) = std::env::var("BRINGFAST_DATA") {
+        if !data.trim().is_empty() {
+            push(PathBuf::from(data.trim()).join("product-images"));
+        }
+    }
+    push(crate::home_dir().join(".bring-fast/product-images"));
+    dirs
+}
+
+fn push_image_url(map: &mut std::collections::HashMap<String, Vec<String>>, key: &str, url: &str) {
+    let key = key.trim();
+    let url = url.trim();
+    if key.is_empty() || url.is_empty() {
+        return;
+    }
+    let entry = map.entry(key.to_string()).or_default();
+    if !entry.iter().any(|have| have == url) {
+        entry.push(url.to_string());
+    }
+}
+
+fn find_cached_image(keys: &[String], urls: &[String], dirs: &[PathBuf]) -> Option<Vec<u8>> {
+    let mut files = Vec::new();
+    for dir in dirs {
+        for key in keys {
+            let safe = safe_key(key);
+            for ext in ["webp", "png", "jpg", "jpeg", "gif"] {
+                files.push(dir.join(format!("{safe}.{ext}")));
+            }
+        }
+        for url in urls {
+            let path = Path::new(url.trim());
+            if path.is_file() {
+                files.push(path.to_path_buf());
+            }
+            if let Some(name) = path.file_name() {
+                files.push(dir.join(name));
+            }
+        }
+    }
+    for path in files {
+        if let Ok(bytes) = fs::read(&path) {
+            if image_ext(&bytes).is_some() {
+                return Some(bytes);
+            }
+        }
+    }
+    None
+}
+
 pub(crate) fn fetch_image(url: &str) -> Option<Vec<u8>> {
     if !(url.starts_with("https://") || url.starts_with("http://")) {
         return None;
@@ -509,5 +644,24 @@ mod tests {
         assert_eq!(app.last_backup_at().as_deref(), Some(when.as_str()));
         assert!(folder.read_dir().unwrap().next().is_some());
         assert!(app.backup_if_due().unwrap().is_none());
+    }
+
+    #[test]
+    fn cached_bringfast_file_and_relative_url_fill_a_missing_image() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = App::open(dir.path().join("oma")).unwrap();
+        let document = r#"{"store":"waitrose","invoice_no":"W","date":"2026-04-02","items":[{"name":"Oat Milk","qty":1,"unit_price":8}]}"#;
+        app.import_document(document).unwrap();
+        let cache = dir.path().join("product-images");
+        fs::create_dir_all(&cache).unwrap();
+        let png = include_bytes!("../../../assets/demo/milk.png");
+        fs::write(cache.join("oat_milk.png"), png).unwrap();
+        let keys = vec!["oat milk".into(), "sku-1".into()];
+        let urls = vec!["/product-images/oat_milk.png".into()];
+        assert!(app
+            .adopt_product_image("Oat Milk", &keys, &urls, &[cache])
+            .unwrap());
+        assert!(app.product_image("Oat Milk").unwrap().is_file());
+        assert!(app.products_missing_images().unwrap().is_empty());
     }
 }
