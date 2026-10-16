@@ -134,21 +134,12 @@ impl App {
     }
 
     pub fn product_image(&self, name: &str) -> Option<PathBuf> {
-        let key = canonical_key(self, name);
-        let relative: String = self
-            .with_conn(|conn| {
-                conn.query_row(
-                    "SELECT path FROM product_images WHERE name_key = ?1",
-                    params![key],
-                    |row| row.get(0),
-                )
-                .optional()
-                .map_err(Error::from)
-            })
-            .ok()
-            .flatten()?;
-        let path = self.data_dir().join("product-images").join(relative);
-        path.is_file().then_some(path)
+        for key in image_lookup_keys(self, name) {
+            if let Some(path) = image_file(self, &key) {
+                return Some(path);
+            }
+        }
+        None
     }
 
     pub fn store_product_image(&self, name: &str, bytes: &[u8]) -> Result<PathBuf> {
@@ -187,7 +178,9 @@ impl App {
                  FROM invoice_lines l
                  JOIN invoices i ON i.id = l.invoice_id
                  WHERE NOT EXISTS (
-                   SELECT 1 FROM product_images p WHERE p.name_key = l.name_key
+                   SELECT 1 FROM product_images p
+                   WHERE p.name_key = l.name_key
+                      OR (l.product_key != '' AND p.name_key = l.product_key)
                  )
                  GROUP BY l.name_key
                  ORDER BY MIN(l.name)",
@@ -436,18 +429,22 @@ fn likely_next(points: &[PurchasePoint], today: NaiveDate) -> (u8, String) {
         return (0, String::new());
     }
     let last = points.last().unwrap().date;
-    let age = (today - last).num_days();
-    if age > 90 {
-        return (0, String::new());
-    }
     let mut intervals = Vec::new();
     for pair in points.windows(2) {
-        intervals.push((pair[1].date - pair[0].date).num_days().max(1) as f64);
+        let gap = (pair[1].date - pair[0].date).num_days();
+        if gap > 0 {
+            intervals.push(gap as f64);
+        }
+    }
+    if intervals.is_empty() {
+        return (0, String::new());
     }
     intervals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let median = intervals[intervals.len() / 2];
     let next = last + chrono::Duration::days(median.round() as i64);
     let until = (next - today).num_days();
+    // A long gap does not wipe the score. A staple bought every few days
+    // stays overdue, with a high likely, until it is bought again.
     let likely = if until <= 0 {
         90
     } else if until <= 2 {
@@ -507,6 +504,45 @@ pub(crate) fn image_ext(bytes: &[u8]) -> Option<&'static str> {
 }
 
 pub(crate) fn safe_key(key: &str) -> String {
+    safe_key_len(key, 160)
+}
+
+/// Bring Fast names cache files with a 160-character key. Older OmaBring
+/// files used 80. Lookups try both.
+pub(crate) fn safe_key_names(key: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut push = |name: String| {
+        if !names.iter().any(|have| have == &name) {
+            names.push(name);
+        }
+    };
+    for max in [160usize, 80] {
+        push(safe_key_len(key, max));
+        push(safe_key_collapsed(key, max));
+    }
+    names
+}
+
+/// Bring Fast names a picture `safe_key("name:{slug}")`, with runs of
+/// punctuation collapsed to one hyphen.
+pub fn bringfast_name_key(name: &str) -> String {
+    let mut slug = String::new();
+    let mut gap = false;
+    for c in name.chars() {
+        if c.is_ascii_alphanumeric() {
+            if gap && !slug.is_empty() {
+                slug.push('-');
+            }
+            gap = false;
+            slug.push(c.to_ascii_lowercase());
+        } else {
+            gap = true;
+        }
+    }
+    format!("name:{slug}")
+}
+
+fn safe_key_len(key: &str, max: usize) -> String {
     let cleaned: String = key
         .chars()
         .map(|c| {
@@ -516,13 +552,85 @@ pub(crate) fn safe_key(key: &str) -> String {
                 '_'
             }
         })
-        .take(80)
+        .take(max)
         .collect();
     if cleaned.is_empty() {
         "product".into()
     } else {
         cleaned
     }
+}
+
+/// Bring Fast: `re.sub(r"[^a-zA-Z0-9._-]+", "_", key)[:max]`.
+fn safe_key_collapsed(key: &str, max: usize) -> String {
+    let mut out = String::new();
+    let mut gap = false;
+    for c in key.chars() {
+        if out.chars().count() >= max {
+            break;
+        }
+        if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') {
+            if gap {
+                out.push('_');
+                gap = false;
+                if out.chars().count() >= max {
+                    break;
+                }
+            }
+            out.push(c);
+        } else {
+            gap = true;
+        }
+    }
+    if gap && out.chars().count() < max {
+        out.push('_');
+    }
+    if out.is_empty() {
+        "unknown".into()
+    } else {
+        out.chars().take(max).collect()
+    }
+}
+
+fn image_file(app: &App, key: &str) -> Option<PathBuf> {
+    let key = key.trim();
+    if key.is_empty() {
+        return None;
+    }
+    let relative: String = app
+        .with_conn(|conn| {
+            conn.query_row(
+                "SELECT path FROM product_images WHERE name_key = ?1",
+                params![key],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(Error::from)
+        })
+        .ok()
+        .flatten()?;
+    let path = app.data_dir().join("product-images").join(relative);
+    path.is_file().then_some(path)
+}
+
+fn image_lookup_keys(app: &App, name: &str) -> Vec<String> {
+    let mut keys = vec![canonical_key(app, name), normalize_name(name)];
+    let wanted = normalize_name(name);
+    let _ = app.with_conn(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT product_key FROM invoice_lines
+             WHERE product_key != '' AND (name_key = ?1 OR lower(name) = lower(?2))",
+        )?;
+        let rows = stmt.query_map(params![wanted, name], |row| row.get::<_, String>(0))?;
+        for row in rows {
+            keys.push(row?);
+        }
+        Ok(())
+    });
+    keys.retain(|key| !key.trim().is_empty());
+    keys.sort();
+    keys.dedup();
+    keys
 }
 
 pub fn product_image_dirs(source: Option<&Path>, receipts: Option<&Path>) -> Vec<PathBuf> {
@@ -568,9 +676,10 @@ fn find_cached_image(keys: &[String], urls: &[String], dirs: &[PathBuf]) -> Opti
     let mut files = Vec::new();
     for dir in dirs {
         for key in keys {
-            let safe = safe_key(key);
-            for ext in ["webp", "png", "jpg", "jpeg", "gif"] {
-                files.push(dir.join(format!("{safe}.{ext}")));
+            for safe in safe_key_names(key) {
+                for ext in ["webp", "png", "jpg", "jpeg", "gif"] {
+                    files.push(dir.join(format!("{safe}.{ext}")));
+                }
             }
         }
         for url in urls {
@@ -598,7 +707,10 @@ pub(crate) fn fetch_image(url: &str) -> Option<Vec<u8>> {
         return None;
     }
     let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(8))
+        .timeout(Duration::from_secs(12))
+        .user_agent(
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        )
         .build()
         .ok()?;
     let response = client.get(url).send().ok()?;
@@ -663,5 +775,31 @@ mod tests {
             .unwrap());
         assert!(app.product_image("Oat Milk").unwrap().is_file());
         assert!(app.products_missing_images().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_regular_product_stays_likely_after_ninety_days() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = App::open(dir.path()).unwrap();
+        let today = Utc::now().date_naive();
+        let last = today - chrono::Duration::days(216);
+        for step in 0..6 {
+            let date = last - chrono::Duration::days(3 * (5 - step));
+            let document = format!(
+                r#"{{"store":"carrefour","invoice_no":"C-{step}","date":"{date}","currency":"AED","items":[{{"name":"Coca Cola Zero","qty":1,"unit":"piece","unit_price":3.5}}]}}"#
+            );
+            app.import_document(&document).unwrap();
+        }
+        let history = app.product_history("Coca Cola Zero").unwrap();
+        assert_eq!(history.times, 6);
+        assert!(history.likely >= 80, "likely {}", history.likely);
+        let next = NaiveDate::parse_from_str(&history.next, "%Y-%m-%d").unwrap();
+        assert!(next < today, "{}", history.next);
+        let names = safe_key_names("name:coca  cola");
+        assert!(names.iter().any(|name| name == "name_coca_cola"));
+        assert_eq!(
+            bringfast_name_key("Coca Cola Zero 330ML"),
+            "name:coca-cola-zero-330ml"
+        );
     }
 }

@@ -1,5 +1,7 @@
 mod catalog;
 
+pub use catalog::mcdonalds_image;
+
 use std::sync::Arc;
 use std::time::Duration;
 

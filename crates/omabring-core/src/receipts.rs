@@ -48,7 +48,16 @@ pub(crate) fn import_receipt_files(
     files.sort();
     for path in files {
         report.files_scanned += 1;
-        match read_receipt(&path) {
+        let parsed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| read_receipt(&path)));
+        let parsed = match parsed {
+            Ok(parsed) => parsed,
+            Err(_) => {
+                eprintln!("skipped unreadable receipt {}", path.display());
+                report.files_unparsed += 1;
+                continue;
+            }
+        };
+        match parsed {
             Some(parsed) if !parsed.invoice_no.is_empty() => {
                 if known_receipt(
                     dest,
@@ -65,7 +74,12 @@ pub(crate) fn import_receipt_files(
                 if dry_run {
                     continue;
                 }
-                insert_receipt(dest, &parsed)?;
+                if let Err(err) = insert_receipt(dest, &parsed) {
+                    eprintln!("skipped receipt {}: {err}", path.display());
+                    report.files_new = report.files_new.saturating_sub(1);
+                    report.lines = report.lines.saturating_sub(parsed.items.len());
+                    report.files_unparsed += 1;
+                }
             }
             _ => report.files_unparsed += 1,
         }
@@ -731,7 +745,7 @@ fn parse_careem(text: &str) -> Option<ParsedReceipt> {
 
 fn careem_inline(line: &str) -> Option<ParsedLine> {
     let compact = line.replace('×', "x");
-    let lower = compact.to_lowercase();
+    let lower = compact.to_ascii_lowercase();
     if careem_summary(&compact) {
         return None;
     }
@@ -768,7 +782,7 @@ fn careem_qty_only(line: &str) -> Option<(f64, String)> {
             return Some((qty, name));
         }
     }
-    if let Some(pos) = compact.to_lowercase().rfind(" x ") {
+    if let Some(pos) = compact.to_ascii_lowercase().rfind(" x ") {
         let name = compact[..pos].trim().to_string();
         let qty = parse_number(compact[pos + 3..].trim())?;
         if name.chars().any(|c| c.is_ascii_alphabetic()) {
@@ -1050,11 +1064,13 @@ fn field_value(text: &str, labels: &[&str]) -> String {
 
 fn after_label(text: &str, labels: &[&str]) -> String {
     let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    let lower = flat.to_lowercase();
+    // ASCII lowercasing keeps byte indexes aligned. `×` is two bytes, and a
+    // full `to_lowercase()` can grow, so a find() index would land inside it.
+    let lower = flat.to_ascii_lowercase();
     for label in labels {
-        let needle = label.to_lowercase();
+        let needle = label.to_ascii_lowercase();
         if let Some(pos) = lower.find(&needle) {
-            let rest = flat[pos + label.len()..].trim();
+            let rest = flat[pos + needle.len()..].trim();
             let rest = rest.trim_start_matches(|c: char| c == ':' || c == '#' || c == ' ');
             if let Some(token) = rest.split_whitespace().next() {
                 if !token.is_empty() && token != ":" {
@@ -1069,18 +1085,22 @@ fn after_label(text: &str, labels: &[&str]) -> String {
 }
 
 fn strip_label<'a>(line: &'a str, label: &str) -> Option<&'a str> {
-    let lower = line.to_lowercase();
-    let needle = label.to_lowercase();
+    let lower = line.to_ascii_lowercase();
+    let needle = label.to_ascii_lowercase();
     let pos = lower.find(&needle)?;
     if pos != 0
         && line
             .as_bytes()
-            .get(pos - 1)
+            .get(pos.saturating_sub(1))
             .is_some_and(|b| b.is_ascii_alphanumeric())
     {
         return None;
     }
-    Some(&line[pos + label.len()..])
+    let end = pos + needle.len();
+    if !line.is_char_boundary(pos) || !line.is_char_boundary(end) {
+        return None;
+    }
+    Some(&line[end..])
 }
 
 fn first_token(value: &str) -> String {
@@ -1132,13 +1152,13 @@ fn between(html: &str, marker: &str, prefix: &str) -> String {
 
 fn html_to_text(html: &str) -> String {
     let raw = html_unescape(html);
+    // ASCII lowercasing keeps the same bytes, so a byte index stays a char
+    // boundary in both strings. A char index does not: `×` is two bytes.
     let lower = raw.to_ascii_lowercase();
-    let bytes = lower.as_bytes();
     let mut out = String::new();
     let mut index = 0;
-    let chars: Vec<char> = raw.chars().collect();
-    while index < chars.len() {
-        if chars[index] == '<' {
+    while index < raw.len() {
+        if lower.as_bytes().get(index) == Some(&b'<') {
             let tail = &lower[index..];
             if tail.starts_with("<script") || tail.starts_with("<style") {
                 let end = if tail.starts_with("<script") {
@@ -1150,7 +1170,8 @@ fn html_to_text(html: &str) -> String {
                 continue;
             }
             let close = tail.find('>').unwrap_or(0);
-            let tag = &tail[..=close.min(tail.len().saturating_sub(1))];
+            let end = close.min(tail.len().saturating_sub(1));
+            let tag = &tail[..=end];
             let block = tag.starts_with("</p")
                 || tag.starts_with("</tr")
                 || tag.starts_with("</td")
@@ -1162,12 +1183,14 @@ fn html_to_text(html: &str) -> String {
             if block {
                 out.push('\n');
             }
-            index += close + 1;
-            let _ = bytes;
+            index = (index + close + 1).min(raw.len());
             continue;
         }
-        out.push(chars[index]);
-        index += 1;
+        let Some(ch) = raw[index..].chars().next() else {
+            break;
+        };
+        out.push(ch);
+        index += ch.len_utf8();
     }
     out.lines()
         .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
@@ -1341,7 +1364,7 @@ fn numbers_in(text: &str) -> Vec<f64> {
 }
 
 fn split_trailing_money(text: &str) -> Option<(String, f64)> {
-    let lower = text.to_lowercase();
+    let lower = text.to_ascii_lowercase();
     let marker = lower.rfind("aed");
     let (name, money) = if let Some(pos) = marker {
         let after = text[pos + 3..].trim();
@@ -1382,7 +1405,9 @@ fn trailing_money(text: &str) -> Option<f64> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_careem, parse_carrefour, parse_grandiose, parse_mmi, read_receipt};
+    use super::{
+        html_to_text, parse_careem, parse_carrefour, parse_grandiose, parse_mmi, read_receipt,
+    };
     use crate::model::StoreId;
     use std::fs;
 
@@ -1510,5 +1535,17 @@ Total AED 123.13
         assert_eq!(out.date, "2026-04-05");
         assert_eq!(out.items.len(), 2);
         assert!((out.items[0].line_total - 29.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn times_sign_does_not_split_the_html_on_a_char_boundary() {
+        let html = "<div>2 &times; Chicken Shawarma</div><br><span>Hummus</span>";
+        let text = html_to_text(html);
+        assert!(text.contains("2 × Chicken Shawarma"), "{text}");
+        assert!(text.contains("Hummus"), "{text}");
+        let mut long = String::from("a");
+        long.push_str(&"×".repeat(80));
+        long.push_str("<br><span>Hummus</span>");
+        assert!(html_to_text(&long).contains("Hummus"));
     }
 }

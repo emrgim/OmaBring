@@ -430,7 +430,23 @@ fn consider_image(
     if image_known(dest, &key)? {
         return Ok(());
     }
-    let bytes = locate_image(line, receipts_dir, &key);
+    let name_key = crate::model::normalize_name(&line.name);
+    let slug = crate::household::bringfast_name_key(&line.name);
+    let bytes = locate_image(line, receipts_dir, &key)
+        .or_else(|| {
+            if name_key.is_empty() || name_key == key {
+                None
+            } else {
+                locate_image(line, receipts_dir, &name_key)
+            }
+        })
+        .or_else(|| {
+            if slug == key || slug == name_key {
+                None
+            } else {
+                locate_image(line, receipts_dir, &slug)
+            }
+        });
     let Some(bytes) = bytes else {
         return Ok(());
     };
@@ -439,7 +455,6 @@ fn consider_image(
         return Ok(());
     }
     write_image(dest, app, &key, &line.image_url, &bytes)?;
-    let name_key = crate::model::normalize_name(&line.name);
     if key != name_key {
         write_image(dest, app, &name_key, &line.image_url, &bytes)?;
     }
@@ -538,16 +553,17 @@ fn push_url(map: &mut HashMap<String, Vec<String>>, key: &str, url: &str) {
 
 fn locate_image(line: &Line, receipts_dir: Option<&Path>, key: &str) -> Option<Vec<u8>> {
     let mut candidates = Vec::new();
-    let safe = crate::household::safe_key(key);
-    for dir in crate::household::product_image_dirs(None, receipts_dir) {
-        for ext in ["webp", "png", "jpg", "jpeg", "gif"] {
-            candidates.push(dir.join(format!("{safe}.{ext}")));
+    for safe in crate::household::safe_key_names(key) {
+        for dir in crate::household::product_image_dirs(None, receipts_dir) {
+            for ext in ["webp", "png", "jpg", "jpeg", "gif"] {
+                candidates.push(dir.join(format!("{safe}.{ext}")));
+            }
         }
-    }
-    if let Some(dir) = receipts_dir {
-        for ext in ["webp", "png", "jpg", "jpeg", "gif"] {
-            candidates.push(dir.join(format!("{safe}.{ext}")));
-            candidates.push(dir.join("product-images").join(format!("{safe}.{ext}")));
+        if let Some(dir) = receipts_dir {
+            for ext in ["webp", "png", "jpg", "jpeg", "gif"] {
+                candidates.push(dir.join(format!("{safe}.{ext}")));
+                candidates.push(dir.join("product-images").join(format!("{safe}.{ext}")));
+            }
         }
     }
     if !line.image_url.is_empty() {
@@ -1719,5 +1735,40 @@ COPY public.invoice_items (id, invoice_id, barcode, name, qty, unit_price, line_
         assert!(urls.iter().any(|url| url == "/product-images/oat.webp"));
         assert!(urls.iter().any(|url| url == "https://cdn.example/oat.png"));
         assert_eq!(index.get("oat").unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_broken_receipt_file_is_skipped_and_the_next_file_is_imported() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("bringfast.db");
+        let conn = Connection::open(&source).unwrap();
+        conn.execute_batch(MEMORY_SCHEMA).unwrap();
+        drop(conn);
+        let receipts = dir.path().join("receipts");
+        fs::create_dir_all(receipts.join("careem")).unwrap();
+        fs::write(receipts.join("careem/not-a-pdf.pdf"), b"not a pdf").unwrap();
+        fs::write(
+            receipts.join("careem/CRM-OK.html"),
+            "Tax Invoice\nCareem Networks\nInvoice No: CRM-OK\nInvoice Date: 26 Aug 2026\n2 × Falafel Wrap AED 22.00\nTotal AED 22.00\n",
+        )
+        .unwrap();
+        let app = App::open(dir.path().join("oma")).unwrap();
+        let report = app
+            .import_bringfast(
+                &source,
+                &BringfastImport {
+                    dry_run: false,
+                    receipts_dir: Some(receipts),
+                    store_accounts: false,
+                },
+            )
+            .unwrap();
+        assert_eq!(report.files_scanned, 2);
+        assert_eq!(report.files_unparsed, 1);
+        assert_eq!(report.files_new, 1);
+        let invoices = app.list_invoices().unwrap();
+        assert_eq!(invoices.len(), 1);
+        assert_eq!(invoices[0].invoice_no, "CRM-OK");
+        assert_eq!(invoices[0].purchased_on, "2026-08-26");
     }
 }

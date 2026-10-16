@@ -19,7 +19,7 @@ window.omabring {
   background-color: var(--omabring-bg);
   color: var(--omabring-fg);
   font-family: {{ font }};
-  font-size: 14px;
+  font-size: 11px;
   border: none;
   border-radius: {{ rounding }}px;
 }
@@ -48,52 +48,52 @@ window.omabring .bf-mark {
   background-color: var(--omabring-fill);
   color: var(--omabring-on-fill);
   font-weight: 700;
-  font-size: 13px;
-  min-width: 34px;
-  min-height: 34px;
+  font-size: 9px;
+  min-width: 18px;
+  min-height: 18px;
 }
 
 window.omabring .bf-brand {
-  font-size: 16px;
+  font-size: 12px;
   font-weight: 700;
-  letter-spacing: 0.3px;
+  letter-spacing: 0;
 }
 
 window.omabring .bf-kicker {
   color: var(--omabring-muted);
-  font-size: 10px;
-  letter-spacing: 1.6px;
+  font-size: 9px;
+  letter-spacing: 0.6px;
 }
 
 window.omabring .bf-field {
   color: var(--omabring-muted);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.8px;
-}
-
-window.omabring .bf-muted {
-  color: var(--omabring-muted);
-  font-size: 13px;
-}
-
-window.omabring .bf-h1 {
-  font-size: 32px;
+  font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.4px;
 }
 
-window.omabring .bf-h1-sm {
-  font-size: 20px;
+window.omabring .bf-muted {
+  color: var(--omabring-muted);
+  font-size: 11px;
+}
+
+window.omabring .bf-h1 {
+  font-size: 15px;
   font-weight: 700;
-  letter-spacing: 0.3px;
+  letter-spacing: 0;
+}
+
+window.omabring .bf-h1-sm {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0;
 }
 
 window.omabring .bf-go {
   color: var(--omabring-accent);
-  font-size: 12px;
+  font-size: 10px;
   font-weight: 700;
-  letter-spacing: 0.8px;
+  letter-spacing: 0.4px;
 }
 
 window.omabring .bf-link,
@@ -102,13 +102,13 @@ window.omabring .bf-link label {
 }
 
 window.omabring .bf-delta {
-  font-size: 24px;
+  font-size: 15px;
   font-weight: 700;
 }
 
 window.omabring .bf-ok {
   color: var(--omabring-fg);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
 }
 
@@ -121,8 +121,10 @@ window.omabring button {
   color: var(--omabring-on-fill);
   border: 1px solid var(--omabring-fill);
   border-radius: 0;
-  padding: 12px 16px;
+  padding: 2px 7px;
   min-height: 0;
+  min-width: 0;
+  font-size: 11px;
   font-weight: 700;
   box-shadow: none;
 }
@@ -144,10 +146,10 @@ window.omabring button.bf-chip label {
   background-color: transparent;
   color: var(--omabring-muted);
   border: 1px solid var(--omabring-line);
-  padding: 4px 8px;
-  font-size: 11px;
+  padding: 1px 5px;
+  font-size: 10px;
   font-weight: 700;
-  letter-spacing: 0.4px;
+  letter-spacing: 0;
   min-height: 0;
 }
 
@@ -156,10 +158,10 @@ window.omabring button.bf-tab label {
   background-color: transparent;
   color: var(--omabring-muted);
   border: 1px solid transparent;
-  padding: 7px 10px;
-  font-size: 12px;
+  padding: 2px 6px;
+  font-size: 11px;
   font-weight: 700;
-  letter-spacing: 0.8px;
+  letter-spacing: 0;
   min-height: 0;
 }
 
@@ -188,18 +190,18 @@ window.omabring .bf-card {
   background-color: var(--omabring-bg);
   color: var(--omabring-fg);
   border: 1px solid var(--omabring-line);
-  padding: 18px 16px;
+  padding: 6px 8px;
 }
 
 window.omabring .bf-dash {
-  padding: 10px 12px 8px;
+  padding: 4px 6px 2px;
 }
 
 window.omabring .bf-filters,
 window.omabring .bf-pin {
   background-color: var(--omabring-bg);
   border-bottom: 1px solid var(--omabring-line);
-  padding: 8px 16px 10px;
+  padding: 2px 8px 3px;
 }
 
 window.omabring .bf-agent,
@@ -210,26 +212,26 @@ window.omabring .bf-agent-icon {
 window.omabring .bf-agent {
   background-color: transparent;
   border: 1px solid var(--omabring-line);
-  padding: 4px;
-  min-width: 34px;
-  min-height: 34px;
+  padding: 1px;
+  min-width: 20px;
+  min-height: 20px;
 }
 
 window.omabring .bf-charts {
-  min-height: 32px;
+  min-height: 20px;
 }
 
 window.omabring button.bf-chart,
 window.omabring button.bf-chart label {
-  padding: 4px 8px;
-  font-size: 11px;
-  min-height: 28px;
+  padding: 1px 5px;
+  font-size: 10px;
+  min-height: 18px;
 }
 
 window.omabring .bf-logo-sm {
-  min-width: 22px;
-  min-height: 22px;
-  font-size: 11px;
+  min-width: 16px;
+  min-height: 16px;
+  font-size: 9px;
 }
 
 window.omabring picture.bf-thumb {
@@ -240,9 +242,9 @@ window.omabring .bf-theme {
   background-color: transparent;
   color: var(--omabring-fg);
   border: 1px solid var(--omabring-line);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
-  padding: 7px 10px;
+  padding: 2px 6px;
 }
 
 window.omabring .bf-dashed {
@@ -252,8 +254,8 @@ window.omabring .bf-dashed {
 window.omabring .bf-pill {
   color: var(--omabring-muted);
   border: 1px solid var(--omabring-border);
-  padding: 2px 6px;
-  font-size: 11px;
+  padding: 0 4px;
+  font-size: 10px;
   font-weight: 700;
 }
 
@@ -266,8 +268,8 @@ window.omabring .bf-pill.on {
 window.omabring .bf-cap {
   background-color: var(--omabring-fill);
   color: var(--omabring-on-fill);
-  padding: 3px 8px;
-  font-size: 11px;
+  padding: 0 4px;
+  font-size: 9px;
   font-weight: 700;
 }
 
@@ -279,18 +281,18 @@ window.omabring .bf-cap.off {
 
 window.omabring .bf-thumb,
 window.omabring .bf-logo {
-  font-size: 18px;
+  font-size: 11px;
   font-weight: 700;
   background-color: var(--omabring-selection);
   color: var(--omabring-fg);
-  min-width: 48px;
-  min-height: 48px;
+  min-width: 22px;
+  min-height: 22px;
 }
 
 window.omabring .bf-logo {
-  min-width: 64px;
-  min-height: 64px;
-  font-size: 22px;
+  min-width: 32px;
+  min-height: 32px;
+  font-size: 13px;
 }
 
 window.omabring picture.bf-logo {
@@ -314,8 +316,8 @@ window.omabring button.bf-bar:hover {
   background-color: transparent;
   border: none;
   padding: 0;
-  min-height: 110px;
-  min-width: 8px;
+  min-height: 52px;
+  min-width: 6px;
 }
 
 window.omabring .bf-dash.is-focus {
@@ -343,10 +345,10 @@ window.omabring button.bf-bar.focus {
 
 window.omabring button.bf-vote,
 window.omabring button.bf-vote label {
-  min-width: 22px;
-  min-height: 22px;
-  padding: 0 4px;
-  font-size: 12px;
+  min-width: 16px;
+  min-height: 16px;
+  padding: 0 2px;
+  font-size: 10px;
 }
 
 window.omabring .bf-bar-fill,
@@ -363,7 +365,7 @@ window.omabring .bf-bar.on {
 window.omabring .bf-row {
   background-color: transparent;
   border-bottom: 1px dashed var(--omabring-line);
-  padding: 8px 4px;
+  padding: 1px 2px;
 }
 
 window.omabring .bf-row:hover,
@@ -374,12 +376,12 @@ window.omabring .bf-row:hover label {
 
 window.omabring .bf-thead {
   border-bottom: 1px solid var(--omabring-line);
-  padding: 10px 8px;
+  padding: 1px 2px;
 }
 
 window.omabring .bf-thead label {
   color: var(--omabring-muted);
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
 }
 
@@ -389,7 +391,7 @@ window.omabring button.bf-th label {
   color: var(--omabring-muted);
   border: none;
   padding: 0;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
   min-height: 0;
 }
@@ -411,7 +413,8 @@ window.omabring spinbutton {
   border-radius: 0;
   box-shadow: none;
   min-height: 0;
-  padding: 12px 13px;
+  padding: 2px 6px;
+  font-size: 11px;
 }
 
 window.omabring textview,

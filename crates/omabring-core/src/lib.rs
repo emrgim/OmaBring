@@ -19,7 +19,8 @@ pub use bringfast::{bringfast_image_index, BringfastImport, ImportReport};
 pub use crypto::pkce_s256;
 pub use error::{Error, Result};
 pub use household::{
-    default_backup_dir, product_image_dirs, MissingImage, ProductHistory, PurchasePoint, StorePrice,
+    bringfast_name_key, default_backup_dir, product_image_dirs, MissingImage, ProductHistory,
+    PurchasePoint, StorePrice,
 };
 pub use model::*;
 pub use theme::{

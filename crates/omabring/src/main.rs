@@ -187,6 +187,17 @@ fn main() -> glib::ExitCode {
             }
         }
     }
+    if let Some(size) = flag_value(&args, "--size") {
+        match size {
+            Ok(value) if parse_size(&value).is_some() => {
+                std::env::set_var("OMABRING_SIZE", value);
+            }
+            _ => {
+                eprintln!("omabring --size needs WxH, for example 1100x740");
+                return glib::ExitCode::from(2);
+            }
+        }
+    }
     if std::env::var_os("WAYLAND_DISPLAY").is_some() && std::env::var_os("GDK_BACKEND").is_none() {
         std::env::set_var("GDK_BACKEND", "wayland");
     }
@@ -292,23 +303,54 @@ fn import_bringfast(
         receipts_dir: receipts_dir.map(std::path::PathBuf::from),
         store_accounts,
     };
-    match core.import_bringfast(std::path::Path::new(path), &options) {
+    let imported = match core.import_bringfast(std::path::Path::new(path), &options) {
         Ok(report) => {
             print!("{report}");
-            if fetch_images && !dry_run {
-                backfill_images(
-                    &core,
-                    std::path::Path::new(path),
-                    receipts_dir.map(std::path::Path::new),
-                );
-            }
-            glib::ExitCode::SUCCESS
+            true
         }
         Err(err) => {
             eprintln!("{err}");
-            glib::ExitCode::from(1)
+            false
         }
+    };
+    if fetch_images && !dry_run {
+        backfill_images(
+            &core,
+            std::path::Path::new(path),
+            receipts_dir.map(std::path::Path::new),
+        );
     }
+    if imported {
+        glib::ExitCode::SUCCESS
+    } else {
+        glib::ExitCode::from(1)
+    }
+}
+
+/// `1100x740`, `1100X740`, or `1100×740`.
+fn parse_size(raw: &str) -> Option<(i32, i32)> {
+    let raw = raw.trim();
+    let (width, height) = raw
+        .split_once(['x', 'X', '×'])
+        .or_else(|| raw.split_once('*'))?;
+    let width: i32 = width.trim().parse().ok()?;
+    let height: i32 = height.trim().parse().ok()?;
+    if (200..=4000).contains(&width) && (160..=3000).contains(&height) {
+        Some((width, height))
+    } else {
+        None
+    }
+}
+
+pub(crate) fn window_size() -> (i32, i32, bool) {
+    if let Some(size) = std::env::var("OMABRING_SIZE")
+        .ok()
+        .as_deref()
+        .and_then(parse_size)
+    {
+        return (size.0, size.1, true);
+    }
+    (640, 520, false)
 }
 
 /// Pictures from Bring Fast's cache and image URLs, then every catalog search.
@@ -334,7 +376,10 @@ fn backfill_images(core: &App, source: &std::path::Path, receipts_dir: Option<&s
     let backend = Registry::live();
     let mut saved = 0usize;
     for (index, item) in missing.iter().enumerate() {
-        let mut keys = vec![omabring_core::normalize_name(&item.name)];
+        let mut keys = vec![
+            omabring_core::normalize_name(&item.name),
+            omabring_core::bringfast_name_key(&item.name),
+        ];
         if !item.product_key.trim().is_empty() {
             keys.push(item.product_key.clone());
         }
@@ -350,14 +395,33 @@ fn backfill_images(core: &App, source: &std::path::Path, receipts_dir: Option<&s
         {
             saved += 1;
         } else {
-            for store in image_stores(item.store) {
-                let url = match backend.product_image(store, &item.name) {
-                    Ok(Some(url)) => url,
-                    _ => continue,
-                };
-                if core.cache_remote_image(&item.name, &url).unwrap_or(false) {
-                    saved += 1;
+            let mut found = false;
+            if item.store == omabring_core::StoreId::Mcdonalds {
+                for query in image_queries(&item.name) {
+                    let Some(url) = omabring_stores::mcdonalds_image(&query) else {
+                        continue;
+                    };
+                    if core.cache_remote_image(&item.name, &url).unwrap_or(false) {
+                        saved += 1;
+                        found = true;
+                        break;
+                    }
+                }
+            }
+            for query in image_queries(&item.name) {
+                if found {
                     break;
+                }
+                for store in image_stores(item.store) {
+                    let url = match backend.product_image(store, &query) {
+                        Ok(Some(url)) => url,
+                        _ => continue,
+                    };
+                    if core.cache_remote_image(&item.name, &url).unwrap_or(false) {
+                        saved += 1;
+                        found = true;
+                        break;
+                    }
                 }
             }
         }
@@ -366,6 +430,39 @@ fn backfill_images(core: &App, source: &std::path::Path, receipts_dir: Option<&s
         }
     }
     eprintln!("saved {saved} product images");
+}
+
+fn image_queries(name: &str) -> Vec<String> {
+    let words: Vec<&str> = name.split_whitespace().collect();
+    let full = words.join(" ");
+    let short: Vec<&str> = words
+        .iter()
+        .copied()
+        .filter(|word| !size_word(word))
+        .take(6)
+        .collect();
+    let short = short.join(" ");
+    let mut queries = Vec::new();
+    if !full.is_empty() {
+        queries.push(full);
+    }
+    if !short.is_empty() && queries.first().is_none_or(|have| have != &short) {
+        queries.push(short);
+    }
+    queries
+}
+
+fn size_word(word: &str) -> bool {
+    let lower = word
+        .trim_matches(|c: char| !c.is_ascii_alphanumeric())
+        .to_ascii_lowercase();
+    if lower.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+        return true;
+    }
+    matches!(
+        lower.as_str(),
+        "ml" | "l" | "ltr" | "kg" | "g" | "pcs" | "pc" | "pet" | "bottle" | "pack" | "x"
+    )
 }
 
 fn image_stores(primary: StoreId) -> Vec<StoreId> {
@@ -461,7 +558,7 @@ fn print_view(name: &str) -> glib::ExitCode {
 
 #[cfg(test)]
 mod cli_tests {
-    use super::{canonical_view, flag_value, image_stores};
+    use super::{canonical_view, flag_value, image_queries, image_stores, parse_size};
     use omabring_core::StoreId;
 
     #[test]
@@ -532,5 +629,11 @@ mod cli_tests {
         assert_eq!(flag_value(&args, "--chart").unwrap().unwrap(), "qty-month");
         let args = vec!["omabring".into(), "--chart".into()];
         assert!(flag_value(&args, "--chart").unwrap().is_err());
+        assert_eq!(parse_size("1100x740"), Some((1100, 740)));
+        assert_eq!(parse_size("655×473"), Some((655, 473)));
+        assert!(parse_size("big").is_none());
+        let queries = image_queries("Coca Cola Zero 330ML PET");
+        assert_eq!(queries[0], "Coca Cola Zero 330ML PET");
+        assert_eq!(queries[1], "Coca Cola Zero");
     }
 }

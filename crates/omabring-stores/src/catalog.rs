@@ -1071,8 +1071,68 @@ fn live_offer(
 /// Best catalog picture for a receipt name. The picture has to belong to a
 /// name that contains the query, so a snack that merely shares one word is skipped.
 pub fn product_image(store: StoreId, query: &str) -> Result<Option<String>, BackendError> {
+    if store == StoreId::Mcdonalds {
+        if let Some(url) = mcdonalds_image(query) {
+            return Ok(Some(url));
+        }
+    }
     let offers = search(store, query)?;
     Ok(pick_image(query, &offers))
+}
+
+/// Picture from the bundled McDonald's UAE menu. The store has no catalog API.
+pub fn mcdonalds_image(query: &str) -> Option<String> {
+    let menu: Vec<McItem> =
+        serde_json::from_str(include_str!("../data/mcdonalds_uae_menu.json")).ok()?;
+    let query_tokens = menu_tokens(query);
+    if query_tokens.is_empty() {
+        return None;
+    }
+    let mut best: Option<(usize, String)> = None;
+    for item in menu {
+        let name_tokens = menu_tokens(&item.name);
+        if name_tokens.is_empty() || item.image_url.trim().is_empty() {
+            continue;
+        }
+        let hits = query_tokens
+            .iter()
+            .filter(|token| name_tokens.iter().any(|word| word == *token))
+            .count();
+        if hits == 0 {
+            continue;
+        }
+        let query_in_name = query_tokens
+            .iter()
+            .all(|token| name_tokens.iter().any(|word| word == token));
+        let name_in_query = name_tokens
+            .iter()
+            .all(|token| query_tokens.iter().any(|word| word == token));
+        if !query_in_name && !name_in_query {
+            continue;
+        }
+        let score = hits * 10 + usize::from(query_in_name);
+        let replace = best.as_ref().is_none_or(|(have, _)| score > *have);
+        if replace {
+            best = Some((score, item.image_url));
+        }
+    }
+    best.map(|(_, url)| url)
+}
+
+#[derive(serde::Deserialize)]
+struct McItem {
+    name: String,
+    image_url: String,
+}
+
+fn menu_tokens(value: &str) -> Vec<String> {
+    value
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .map(|token| token.to_ascii_lowercase())
+        .filter(|token| {
+            token.len() > 2 && !matches!(token.as_str(), "meal" | "large" | "medium" | "small")
+        })
+        .collect()
 }
 
 pub(crate) fn pick_image(query: &str, offers: &[Offer]) -> Option<String> {
@@ -1092,22 +1152,61 @@ pub(crate) fn pick_image(query: &str, offers: &[Offer]) -> Option<String> {
 }
 
 fn image_name_ok(query: &str, name: &str) -> bool {
-    let query_tokens = significant_tokens(query);
-    let name_tokens = significant_tokens(name);
+    let query_tokens = content_tokens(query);
+    let name_tokens = content_tokens(name);
     if query_tokens.is_empty() || name_tokens.is_empty() {
         return false;
     }
-    if !query_tokens
+    let hits = query_tokens
         .iter()
-        .all(|token| name_tokens.iter().any(|word| word == token))
-    {
+        .filter(|token| name_tokens.iter().any(|word| word == *token))
+        .count();
+    // Receipt titles carry pack sizes the catalog title omits. One extra
+    // word can miss; the brand and the product still have to match.
+    let need = if query_tokens.len() <= 2 {
+        query_tokens.len()
+    } else {
+        query_tokens.len() - 1
+    };
+    if hits < need {
         return false;
     }
-    let query_is_snack = query_tokens.iter().any(|token| snack_token(token));
+    let query_is_snack = significant_tokens(query)
+        .iter()
+        .any(|token| snack_token(token));
     if !query_is_snack && name_tokens.iter().any(|token| snack_token(token)) {
         return false;
     }
     true
+}
+
+fn content_tokens(value: &str) -> Vec<String> {
+    significant_tokens(value)
+        .into_iter()
+        .filter(|token| !size_token(token))
+        .collect()
+}
+
+fn size_token(token: &str) -> bool {
+    if matches!(
+        token,
+        "ml" | "ltr"
+            | "litre"
+            | "liter"
+            | "kg"
+            | "pack"
+            | "pcs"
+            | "pet"
+            | "bottle"
+            | "can"
+            | "cans"
+            | "piece"
+            | "size"
+    ) {
+        return true;
+    }
+    let digits = token.trim_end_matches(|c: char| c.is_ascii_alphabetic());
+    !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()) && digits.len() < token.len()
 }
 
 fn snack_token(token: &str) -> bool {
@@ -1665,5 +1764,20 @@ mod tests {
             Some("https://cdn.example/milk.jpg")
         );
         assert!(pick_image("milk", &ranked[..1]).is_none());
+        let cola = vec![live_offer(
+            StoreId::Carrefour,
+            "3".into(),
+            "Coca-Cola Zero Sugar 330 ml".into(),
+            3.5,
+            "AED",
+            "https://cdn.example/cola.jpg",
+        )];
+        assert_eq!(
+            pick_image("Coca Cola Zero Sugar 330ML PET", &cola).as_deref(),
+            Some("https://cdn.example/cola.jpg")
+        );
+        assert!(mcdonalds_image("Double Cheeseburger Large Meal")
+            .is_some_and(|url| url.contains("mcdonalds")));
+        assert!(mcdonalds_image("Falafel Wrap").is_none());
     }
 }
