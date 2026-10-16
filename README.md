@@ -2,7 +2,7 @@
 
 OmaBring is a native desktop app for [Omarchy](https://omarchy.org) (Arch Linux and Hyprland). It is a personal UAE grocery shopper on this machine: link store accounts, search and compare prices, keep carts, prepare checkout, import receipts, and see spending plus what to buy again.
 
-The window is GTK 4 and libadwaita. It follows the active Omarchy theme and runs as a Wayland application. A background service on this machine exposes the same features to an approved client over MCP, with OAuth.
+The window is GTK 4 and libadwaita. It follows the active Omarchy theme and runs as a Wayland application. Dashboard, Purchases, Stores, and Settings sit under one header: spend bars, a product table, store cards, a cart, and the local service address. A background service on this machine exposes the same features to an approved client over MCP, with OAuth.
 
 ## Features
 
@@ -106,7 +106,7 @@ cargo test --workspace
 cargo build --release
 ```
 
-`omabring --version` prints the version. `omabring --print-theme` prints the CSS taken from the active Omarchy theme. `omabring --smoke` opens the window and closes it, for a display check.
+`omabring --version` prints the version. `omabring --print-theme` prints the CSS taken from the active Omarchy theme. `omabring --smoke` opens the window and closes it, for a display check. `OMABRING_PAGE` opens `dashboard`, `purchases`, `stores`, `settings`, `store`, or `product`. `OMABRING_DEMO=1` loads sample receipts only when the receipt list is empty.
 
 ## Layout
 
