@@ -2,7 +2,6 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -14,8 +13,8 @@ use gtk4 as gtk;
 use libadwaita as adw;
 use libadwaita::prelude::*;
 use omabring_core::{
-    active_stylesheet, home_dir, load_active_palette, theme_watch_paths, App, CartLine,
-    ForecastStatus, InvoiceSummary, Offer, StoreId,
+    home_dir, load_window_theme, theme_watch_paths, App, CartLine, ForecastStatus, InvoiceSummary,
+    Offer, StoreId,
 };
 use omabring_stores::Registry;
 
@@ -108,7 +107,9 @@ pub fn open_window(app: &adw::Application, core: Arc<App>, backend: Arc<Registry
         .build();
     window.add_css_class("omabring");
     window.set_decorated(false);
-    if !css_disabled() {
+    let provider = if css_disabled() {
+        None
+    } else {
         let provider = gtk::CssProvider::new();
         if let Some(display) = gtk::gdk::Display::default() {
             gtk::style_context_add_provider_for_display(
@@ -117,8 +118,8 @@ pub fn open_window(app: &adw::Application, core: Arc<App>, backend: Arc<Registry
                 gtk::STYLE_PROVIDER_PRIORITY_USER,
             );
         }
-        follow_theme(provider);
-    }
+        Some(provider)
+    };
 
     let toast = adw::ToastOverlay::new();
     let shell = build_chrome(&window, &toast, core, backend);
@@ -127,16 +128,14 @@ pub fn open_window(app: &adw::Application, core: Arc<App>, backend: Arc<Registry
     window.set_content(Some(&toast));
     render(&shell);
     install_keys(&window, &shell);
+    if let Some(provider) = provider {
+        follow_theme(provider, shell.borrow().mode_label.clone());
+    }
     window.present();
 
     let shell_for_consent = shell.clone();
     glib::timeout_add_local(std::time::Duration::from_millis(800), move || {
         poll_consent(&shell_for_consent);
-        let dark = load_active_palette(&home_dir()).dark;
-        shell_for_consent
-            .borrow()
-            .mode_label
-            .set_text(if dark { "DARK" } else { "LIGHT" });
         let address = omabring_core::default_bind_addr();
         let up = std::net::TcpStream::connect_timeout(
             &address
@@ -161,52 +160,33 @@ fn css_disabled() -> bool {
 
 thread_local! {
     static APPLYING_THEME: Cell<bool> = const { Cell::new(false) };
+    static THEME_MONITORS: RefCell<Vec<gtk::gio::FileMonitor>> = RefCell::new(Vec::new());
 }
 
-fn follow_theme(provider: gtk::CssProvider) {
+fn follow_theme(provider: gtk::CssProvider, mode_label: gtk::Label) {
     let css = Rc::new(RefCell::new(String::new()));
-    refresh_theme(&provider, &css);
-    let monitors = Rc::new(RefCell::new(Vec::<gtk::gio::FileMonitor>::new()));
-    let armed = Rc::new(RefCell::new(Vec::<PathBuf>::new()));
-    let provider_for_watch = provider.clone();
-    let css_for_watch = css.clone();
-    let arm = move || {
-        let paths = theme_watch_paths(&home_dir());
-        if *armed.borrow() == paths {
-            return;
-        }
-        *armed.borrow_mut() = paths.clone();
-        let mut held = monitors.borrow_mut();
-        held.clear();
-        for path in paths {
-            let file = gtk::gio::File::for_path(&path);
-            let watched = if path.is_dir() {
-                file.monitor_directory(FileMonitorFlags::WATCH_MOVES, Cancellable::NONE)
-            } else {
-                file.monitor_file(FileMonitorFlags::WATCH_MOVES, Cancellable::NONE)
-            };
-            let Ok(monitor) = watched else {
-                continue;
-            };
-            let provider = provider_for_watch.clone();
-            let css = css_for_watch.clone();
-            monitor.connect_changed(move |_, _, _, _| {
-                refresh_theme(&provider, &css);
-            });
-            held.push(monitor);
-        }
-    };
-    arm();
-    let provider_for_tick = provider.clone();
-    let css_for_tick = css.clone();
-    glib::timeout_add_local(std::time::Duration::from_secs(2), move || {
-        refresh_theme(&provider_for_tick, &css_for_tick);
-        arm();
-        ControlFlow::Continue
+    refresh_theme(&provider, &css, &mode_label);
+    let mut held = Vec::new();
+    for path in theme_watch_paths(&home_dir()) {
+        let file = gtk::gio::File::for_path(&path);
+        let Ok(monitor) = file.monitor_directory(FileMonitorFlags::WATCH_MOVES, Cancellable::NONE)
+        else {
+            continue;
+        };
+        let provider = provider.clone();
+        let css = css.clone();
+        let mode_label = mode_label.clone();
+        monitor.connect_changed(move |_, _, _, _| {
+            refresh_theme(&provider, &css, &mode_label);
+        });
+        held.push(monitor);
+    }
+    THEME_MONITORS.with(|slot| {
+        *slot.borrow_mut() = held;
     });
 }
 
-fn refresh_theme(provider: &gtk::CssProvider, current: &RefCell<String>) {
+fn refresh_theme(provider: &gtk::CssProvider, current: &RefCell<String>, mode_label: &gtk::Label) {
     if APPLYING_THEME.get() {
         return;
     }
@@ -219,8 +199,8 @@ fn refresh_theme(provider: &gtk::CssProvider, current: &RefCell<String>) {
     }
     let _guard = ClearApply;
 
-    let palette = load_active_palette(&home_dir());
-    let css = active_stylesheet(&home_dir());
+    let (palette, css) = load_window_theme(&home_dir());
+    mode_label.set_text(if palette.dark { "DARK" } else { "LIGHT" });
     if css != *current.borrow() {
         *current.borrow_mut() = css.clone();
         provider.load_from_data(&css);
@@ -247,7 +227,7 @@ fn build_chrome(
         button.add_css_class("bf-tab");
         button
     };
-    let mode = gtk::Label::new(Some(if load_active_palette(&home_dir()).dark {
+    let mode = gtk::Label::new(Some(if load_window_theme(&home_dir()).0.dark {
         "DARK"
     } else {
         "LIGHT"

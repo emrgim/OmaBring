@@ -8,7 +8,7 @@ use gtk4 as gtk;
 use libadwaita as adw;
 use libadwaita::prelude::*;
 use omabring_core::{
-    default_data_dir, home_dir, load_active_palette, App, OfferSource, StoreId, VERSION,
+    default_data_dir, home_dir, load_window_theme, App, OfferSource, StoreId, VERSION,
 };
 use omabring_stores::Registry;
 
@@ -88,8 +88,8 @@ fn main() -> glib::ExitCode {
         return glib::ExitCode::SUCCESS;
     }
     if args.iter().any(|arg| arg == "--print-theme") {
-        let palette = load_active_palette(&home_dir());
-        println!("{}", palette.to_css());
+        let (_palette, css) = load_window_theme(&home_dir());
+        println!("{css}");
         return glib::ExitCode::SUCCESS;
     }
     if let Some(import) = flag_value(&args, "--import-bringfast") {

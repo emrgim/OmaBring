@@ -24,6 +24,7 @@ pub struct Palette {
     pub darker_background: String,
     pub lighter_background: String,
     pub border: String,
+    pub accent_fg: String,
     pub font: String,
 }
 
@@ -114,6 +115,7 @@ impl RawColors {
             "dark" => true,
             _ => channel_sum(&background) <= 382,
         };
+        let accent_fg = readable_fg(&accent, &background, &foreground);
         Some(Palette {
             mode,
             dark,
@@ -129,6 +131,7 @@ impl RawColors {
             darker_background,
             lighter_background,
             border,
+            accent_fg,
             font: DEFAULT_FONT.into(),
         })
     }
@@ -151,6 +154,7 @@ impl Palette {
             darker_background: "#11111b".into(),
             lighter_background: "#313244".into(),
             border: "#313244".into(),
+            accent_fg: readable_fg("#89b4fa", "#1e1e2e", "#cdd6f4"),
             font: DEFAULT_FONT.into(),
         }
     }
@@ -170,12 +174,11 @@ impl Palette {
 }
 
 fn render_sheet(palette: &Palette) -> String {
-    let accent_fg = readable_fg(&palette.accent, &palette.background, &palette.foreground);
     let font = css_font_family(&palette.font);
-    include_str!("../../../packaging/omabring.css.tpl")
+    include_str!("window.css")
         .replace("{{ background }}", &palette.background)
         .replace("{{ foreground }}", &palette.foreground)
-        .replace("{{ accent_fg }}", &accent_fg)
+        .replace("{{ accent_fg }}", &palette.accent_fg)
         .replace("{{ accent }}", &palette.accent)
         .replace("{{ selection }}", &palette.selection)
         .replace("{{ muted }}", &palette.muted)
@@ -188,77 +191,156 @@ fn render_sheet(palette: &Palette) -> String {
         .replace("{{ font }}", &font)
 }
 
-/// Stylesheet for the open window.
+/// Palette and widget sheet for the open window.
 ///
-/// Omarchy writes one CSS file per app into the active theme when
-/// `omarchy-theme-set` renders `~/.config/omarchy/themed/*.tpl`. A finished
-/// `omabring.css` is the window sheet. `supermarket.css` is used when that
-/// file is an OmaBring sheet. A template that still contains `{{`
-/// placeholders is ignored, and the sheet is built from the palette.
-/// `cycle.css` and `shader-desk.css` belong to other apps and are not applied.
+/// `omabring.css` in the active theme is the rendered `@define-color` sheet.
+/// Its roles replace the parsed palette. A file that still contains `{{`
+/// placeholders is ignored. With no rendered sheet, the colors.toml parser
+/// is the source. The widget sheet itself stays free of `@define-color` and
+/// of libadwaita color names.
+pub fn load_window_theme(home: &Path) -> (Palette, String) {
+    let palette = window_palette(home);
+    let css = palette.to_css();
+    (palette, css)
+}
+
 pub fn active_stylesheet(home: &Path) -> String {
-    if let Some(dir) = resolve_theme_dir(home) {
-        for name in ["omabring.css", "supermarket.css"] {
-            if let Some(sheet) = owned_sheet(&dir.join(name)) {
-                return sheet;
-            }
-        }
-    }
-    load_active_palette(home).to_css()
+    load_window_theme(home).1
 }
 
-fn owned_sheet(path: &Path) -> Option<String> {
-    let text = fs::read_to_string(path).ok()?;
-    if !text.contains("window.omabring")
-        || text.contains("{{")
-        || text.contains("@define-color")
-        || text.contains(":root")
-        || text.contains("--window-")
-        || text.contains("--accent-color")
-    {
-        return None;
-    }
-    Some(text)
-}
-
-/// Directories and files whose replacement should restyle the window.
-///
-/// `omarchy-theme-set` deletes `current/theme` and moves a new directory into
-/// its place, so the watch is the parent `current` directory as well as the
-/// theme directory itself. The fontconfig directory is included because the
-/// monospace face lives there.
-pub fn theme_watch_paths(home: &Path) -> Vec<PathBuf> {
-    let mut paths = Vec::new();
-    let mut push = |path: PathBuf| {
-        if path.exists() && !paths.iter().any(|have| have == &path) {
-            paths.push(path);
-        }
+fn window_palette(home: &Path) -> Palette {
+    let palette = load_active_palette(home);
+    let Some(dir) = resolve_theme_dir(home) else {
+        return palette;
     };
-    push(home.join(".config/omarchy/current"));
-    push(home.join(".local/state/omarchy/current"));
-    push(home.join(".config/fontconfig"));
-    if let Some(theme) = resolve_theme_dir(home) {
-        if let Some(parent) = theme.parent() {
-            push(parent.to_path_buf());
-        }
-        push(theme.clone());
-        if let Some(resolved) = follow_limited(&theme, 16) {
-            if resolved != theme {
-                if let Some(parent) = resolved.parent() {
-                    push(parent.to_path_buf());
-                }
-                push(resolved);
-            }
-        }
+    let Ok(text) = fs::read_to_string(dir.join("omabring.css")) else {
+        return palette;
+    };
+    apply_omabring_css(&text, palette)
+}
+
+fn apply_omabring_css(text: &str, mut palette: Palette) -> Palette {
+    if text.contains("{{") || !text.contains("@define-color") {
+        return palette;
     }
-    paths.sort();
-    paths
+    let mut raw = RawColors::default();
+    let mut accent_fg = None;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if !trimmed.starts_with("@define-color") {
+            continue;
+        }
+        let rest = trimmed.trim_start_matches("@define-color").trim();
+        let mut parts = rest.split_whitespace();
+        let Some(name) = parts.next() else {
+            continue;
+        };
+        let Some(value) = parts.next() else {
+            continue;
+        };
+        let name = name.trim_end_matches(';').to_ascii_lowercase();
+        let Some(color) = first_color(value.trim_end_matches(';')) else {
+            continue;
+        };
+        if name == "accent_fg" || name == "omabring_accent_fg" {
+            accent_fg = Some(color);
+            continue;
+        }
+        let name = name.strip_prefix("omabring_").unwrap_or(&name);
+        assign_define(&mut raw, name, color);
+    }
+    if raw.background.is_none() && raw.accent.is_none() && raw.foreground.is_none() {
+        return palette;
+    }
+    let saw_surface = raw.lighter_background.is_some() || raw.muted.is_some();
+    if let Some(color) = raw.background {
+        palette.background = color;
+    }
+    if let Some(color) = raw.foreground {
+        palette.foreground = color;
+    }
+    if let Some(color) = raw.accent {
+        palette.accent = color;
+    }
+    if let Some(color) = raw.selection {
+        palette.selection = color;
+    }
+    if let Some(color) = raw.muted {
+        palette.muted = color;
+    }
+    if let Some(color) = raw.red {
+        palette.red = color;
+    }
+    if let Some(color) = raw.green {
+        palette.green = color;
+    }
+    if let Some(color) = raw.yellow {
+        palette.yellow = color;
+    }
+    if let Some(color) = raw.blue {
+        palette.blue = color;
+    }
+    if let Some(color) = raw.darker_background {
+        palette.darker_background = color;
+    }
+    if let Some(color) = raw.lighter_background {
+        palette.lighter_background = color;
+    }
+    if let Some(color) = raw.border {
+        palette.border = color;
+    } else if saw_surface {
+        palette.border = palette.lighter_background.clone();
+    }
+    if palette.border.eq_ignore_ascii_case(&palette.background) {
+        palette.border = palette.muted.clone();
+    }
+    palette.accent_fg = accent_fg
+        .unwrap_or_else(|| readable_fg(&palette.accent, &palette.background, &palette.foreground));
+    palette.dark = match palette.mode.as_str() {
+        "light" => false,
+        "dark" => true,
+        _ => channel_sum(&palette.background) <= 382,
+    };
+    palette
+}
+
+fn assign_define(raw: &mut RawColors, name: &str, color: String) {
+    let slot = match name {
+        "background" | "bg" => &mut raw.background,
+        "foreground" | "fg" => &mut raw.foreground,
+        "accent" => &mut raw.accent,
+        "selection" => &mut raw.selection,
+        "muted" => &mut raw.muted,
+        "border" | "border_color" | "border-color" => &mut raw.border,
+        "lighter_background" | "lighter-background" | "lighter_bg" => &mut raw.lighter_background,
+        "darker_background" | "darker-background" | "darker_bg" => &mut raw.darker_background,
+        "red" => &mut raw.red,
+        "green" => &mut raw.green,
+        "yellow" => &mut raw.yellow,
+        "blue" => &mut raw.blue,
+        _ => return,
+    };
+    *slot = Some(color);
+}
+
+/// The directory `omarchy-theme-set` swaps.
+///
+/// The tool writes `current/next-theme`, then removes `current/theme` and
+/// moves the new directory into its place. A monitor on `current` survives
+/// that swap. A monitor on `theme` does not.
+pub fn theme_watch_paths(home: &Path) -> Vec<PathBuf> {
+    let path = home.join(".local/state/omarchy/current");
+    if path.is_dir() {
+        vec![path]
+    } else {
+        Vec::new()
+    }
 }
 
 /// Resolve the active Omarchy theme directory.
 ///
-/// Prefers an explicit override, then `~/.config/omarchy/current/theme`, then
-/// `~/.local/state/omarchy/current/theme`.
+/// Prefers an explicit override, then `~/.local/state/omarchy/current/theme`,
+/// then `~/.config/omarchy/current/theme` when the state theme is absent.
 pub fn resolve_theme_dir_at(home: &Path, override_dir: Option<&Path>) -> Option<PathBuf> {
     if let Some(path) = override_dir {
         if path.as_os_str().is_empty() {
@@ -269,8 +351,8 @@ pub fn resolve_theme_dir_at(home: &Path, override_dir: Option<&Path>) -> Option<
         }
     }
     let candidates = [
-        home.join(".config/omarchy/current/theme"),
         home.join(".local/state/omarchy/current/theme"),
+        home.join(".config/omarchy/current/theme"),
     ];
     for candidate in candidates {
         if theme_has_source(&candidate) {
@@ -299,6 +381,7 @@ fn dir_has_source(dir: &Path) -> bool {
         "style.css",
         "waybar/style.css",
         "walker/style.css",
+        "omabring.css",
     ];
     NAMES.iter().any(|name| dir.join(name).is_file()) || dir.join("light.mode").is_file()
 }
@@ -380,65 +463,10 @@ fn load_palette_dir(dir: &Path) -> Option<Palette> {
             }
         }
     }
-    // Per-app sheets rendered into the theme. Later files win, so a grocery
-    // sheet can name the accent and the border after colors.toml.
-    for name in ["omabring.css", "supermarket.css"] {
-        let file = dir.join(name);
-        if file.is_file() {
-            if let Ok(text) = fs::read_to_string(&file) {
-                raw.overlay(raw_from_role_lines(&text));
-            }
-        }
-    }
     if raw.mode.is_none() && dir.join("light.mode").is_file() {
         raw.mode = Some("light".into());
     }
     raw.finish()
-}
-
-fn raw_from_role_lines(text: &str) -> RawColors {
-    let mut raw = RawColors::default();
-    for line in text.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with("@define-color") {
-            apply_define(&mut raw, trimmed);
-            continue;
-        }
-        let Some(rest) = trimmed.strip_prefix("--") else {
-            continue;
-        };
-        let Some((key, value)) = rest.split_once(':') else {
-            continue;
-        };
-        let key = key
-            .trim()
-            .trim_start_matches("omabring-")
-            .to_ascii_lowercase();
-        let Some(color) = first_color(value) else {
-            continue;
-        };
-        assign_role(&mut raw, &key, color);
-    }
-    raw
-}
-
-fn assign_role(raw: &mut RawColors, key: &str, color: String) {
-    let slot = match key {
-        "background" | "bg" => &mut raw.background,
-        "foreground" | "fg" => &mut raw.foreground,
-        "accent" => &mut raw.accent,
-        "selection" => &mut raw.selection,
-        "muted" => &mut raw.muted,
-        "border" | "border-color" => &mut raw.border,
-        "lighter_background" | "lighter-background" => &mut raw.lighter_background,
-        "darker_background" | "darker-background" => &mut raw.darker_background,
-        "red" => &mut raw.red,
-        "green" => &mut raw.green,
-        "yellow" => &mut raw.yellow,
-        "blue" => &mut raw.blue,
-        _ => return,
-    };
-    *slot = Some(color);
 }
 
 fn raw_from_file(path: &Path) -> Option<RawColors> {
@@ -1004,7 +1032,7 @@ selection_background = "#d0d8e8"
     }
 
     #[test]
-    fn resolves_config_theme_before_state_theme() {
+    fn resolves_state_theme_before_config_theme() {
         let home = tempfile::tempdir().unwrap();
         let config = home.path().join(".config/omarchy/current/theme");
         fs::create_dir_all(&config).unwrap();
@@ -1021,10 +1049,11 @@ selection_background = "#d0d8e8"
         )
         .unwrap();
         let dir = resolve_theme_dir_at(home.path(), None).unwrap();
+        assert_eq!(dir, state);
         let palette = load_palette_path(&dir).unwrap();
-        assert_eq!(palette.background, "#111111");
-        let watched = theme_watch_paths(home.path());
-        assert!(watched.iter().any(|path| path.ends_with("omarchy/current")));
+        assert_eq!(palette.background, "#ffffff");
+        let current = state.parent().unwrap();
+        assert_eq!(theme_watch_paths(home.path()), vec![current.to_path_buf()]);
     }
 
     #[test]
@@ -1041,8 +1070,8 @@ selection_background = "#d0d8e8"
         assert_eq!(dir, state);
         let palette = load_palette_path(&dir).unwrap();
         assert_eq!(palette.background, "#abcdef");
-        let watched = theme_watch_paths(home.path());
-        assert!(watched.iter().any(|path| path == &state));
+        let current = state.parent().unwrap();
+        assert_eq!(theme_watch_paths(home.path()), vec![current.to_path_buf()]);
     }
 
     #[test]
@@ -1060,8 +1089,23 @@ selection_background = "#d0d8e8"
         std::os::unix::fs::symlink(&state, config_parent.join("theme")).unwrap();
         let palette = load_active_palette(home.path());
         assert_eq!(palette.background, "#222222");
-        let watched = theme_watch_paths(home.path());
-        assert!(watched.iter().any(|path| path == &state));
+        let current = state.parent().unwrap();
+        assert_eq!(theme_watch_paths(home.path()), vec![current.to_path_buf()]);
+    }
+
+    #[test]
+    fn watches_only_the_state_current_directory() {
+        let home = tempfile::tempdir().unwrap();
+        assert!(theme_watch_paths(home.path()).is_empty());
+        let config = home.path().join(".config/omarchy/current/theme");
+        fs::create_dir_all(&config).unwrap();
+        fs::write(config.join("colors.toml"), "background = \"#111111\"\n").unwrap();
+        let fonts = home.path().join(".config/fontconfig");
+        fs::create_dir_all(&fonts).unwrap();
+        assert!(theme_watch_paths(home.path()).is_empty());
+        let current = home.path().join(".local/state/omarchy/current");
+        fs::create_dir_all(&current).unwrap();
+        assert_eq!(theme_watch_paths(home.path()), vec![current]);
     }
 
     #[test]
@@ -1265,48 +1309,67 @@ accent = "#88a4d2"
     }
 
     #[test]
-    fn rendered_app_sheet_wins_and_a_template_does_not() {
+    fn omabring_css_roles_override_colors_toml() {
         let home = tempfile::tempdir().unwrap();
         let theme = home.path().join(".local/state/omarchy/current/theme");
         fs::create_dir_all(&theme).unwrap();
         fs::write(
             theme.join("colors.toml"),
-            "background = \"#151518\"\nforeground = \"#e2e3e8\"\naccent = \"#88a4d2\"\n",
+            "background = \"#151518\"\nforeground = \"#e2e3e8\"\naccent = \"#ffffff\"\nselection = \"#111111\"\nmuted = \"#222222\"\nlighter_background = \"#151518\"\n",
         )
         .unwrap();
-        fs::write(
-            theme.join("supermarket.css"),
-            "window.omabring { --omabring-accent: #112233; background: {{ accent }}; }\n",
-        )
-        .unwrap();
-        let generated = active_stylesheet(home.path());
-        assert!(generated.contains("--omabring-accent: #88a4d2;"));
-        assert!(!generated.contains("{{"));
+        fs::write(theme.join("omabring.css"), "{{ accent }}\n").unwrap();
+        let (palette, css) = load_window_theme(home.path());
+        assert_eq!(palette.accent, "#ffffff");
+        assert!(css.contains("--omabring-fill: #ffffff;"));
+        assert!(!css.contains("{{"));
+        assert!(!css.contains("@define-color"));
         fs::write(
             theme.join("omabring.css"),
-            "window.omabring { background-color: #151518; color: #e2e3e8; }\n",
+            "window.omabring { background-color: #010101; }\n",
         )
         .unwrap();
-        let sheet = active_stylesheet(home.path());
-        assert!(sheet.contains("background-color: #151518;"));
-        assert!(!sheet.contains("--omabring-fill"));
+        assert_eq!(load_window_theme(home.path()).0.accent, "#ffffff");
+        fs::write(
+            theme.join("omabring.css"),
+            "@define-color accent #88a4d2;\n@define-color accent_fg #151518;\n@define-color selection #2a2d3a;\n@define-color muted #8b8d97;\n@define-color background #151518;\n@define-color darker_background #101014;\n@define-color lighter_background #1c1c21;\n@define-color foreground #e2e3e8;\n@define-color border #1c1c21;\n@define-color red #f7768e;\n@define-color green #9ece6a;\n@define-color yellow #e0af68;\n",
+        )
+        .unwrap();
+        let (palette, css) = load_window_theme(home.path());
+        assert_eq!(palette.accent, "#88a4d2");
+        assert_eq!(palette.accent_fg, "#151518");
+        assert_eq!(palette.selection, "#2a2d3a");
+        assert_eq!(palette.muted, "#8b8d97");
+        assert_eq!(palette.border, "#1c1c21");
+        assert_eq!(palette.red, "#f7768e");
+        assert!(css.contains("--omabring-fill: #88a4d2;"));
+        assert!(css.contains("--omabring-on-fill: #151518;"));
+        assert!(css.contains("--omabring-selection: #2a2d3a;"));
+        assert!(css.contains("--omabring-line: #1c1c21;"));
+        assert!(css.contains("background-color: var(--omabring-selection);"));
+        assert!(!css.contains("@define-color"));
+        assert!(!css.contains(":root"));
+        assert!(!css.contains("--accent-color"));
+        assert!(!css.contains("--window-"));
     }
 
     #[test]
-    fn supermarket_role_colors_overlay_the_palette() {
-        let dir = tempfile::tempdir().unwrap();
+    fn omabring_css_border_falls_back_to_muted_when_it_matches_the_background() {
+        let home = tempfile::tempdir().unwrap();
+        let theme = home.path().join(".local/state/omarchy/current/theme");
+        fs::create_dir_all(&theme).unwrap();
         fs::write(
-            dir.path().join("colors.toml"),
-            "background = \"#151518\"\nforeground = \"#e2e3e8\"\naccent = \"#88a4d2\"\n",
+            theme.join("colors.toml"),
+            "background = \"#111111\"\nforeground = \"#eeeeee\"\naccent = \"#89b4fa\"\n",
         )
         .unwrap();
         fs::write(
-            dir.path().join("supermarket.css"),
-            "@define-color border #2a2a30;\n--accent: #88a4d2;\n",
+            theme.join("omabring.css"),
+            "@define-color background #151518;\n@define-color foreground #e2e3e8;\n@define-color accent #88a4d2;\n@define-color lighter_background #151518;\n@define-color muted #8b8d97;\n@define-color border #151518;\n",
         )
         .unwrap();
-        let palette = load_palette_path(dir.path()).unwrap();
-        assert_eq!(palette.accent, "#88a4d2");
-        assert_eq!(palette.border, "#2a2a30");
+        let palette = load_window_theme(home.path()).0;
+        assert_eq!(palette.border, "#8b8d97");
+        assert!(palette.to_css().contains("--omabring-line: #8b8d97;"));
     }
 }
