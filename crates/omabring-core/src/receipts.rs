@@ -14,6 +14,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use crate::bringfast::ImportReport;
 use crate::error::{Error, Result};
 use crate::model::{is_size_upcharge, junk_product_name, normalize_name, StoreId};
+use crate::App;
 
 struct ParsedLine {
     name: String,
@@ -68,6 +69,7 @@ pub(crate) fn import_receipt_files(
                 )? {
                     report.files_existing += 1;
                     if !dry_run {
+                        let _ = remember_receipt_file(dest, invoice_id, &path);
                         report.lines += add_missing_lines(dest, invoice_id, &parsed)?;
                     }
                     continue;
@@ -77,7 +79,7 @@ pub(crate) fn import_receipt_files(
                 if dry_run {
                     continue;
                 }
-                if let Err(err) = insert_receipt(dest, &parsed) {
+                if let Err(err) = insert_receipt(dest, &parsed, Some(&path)) {
                     eprintln!("skipped receipt {}: {err}", path.display());
                     report.files_new = report.files_new.saturating_sub(1);
                     report.lines = report.lines.saturating_sub(parsed.items.len());
@@ -220,7 +222,7 @@ fn add_missing_lines(dest: &Connection, invoice_id: i64, parsed: &ParsedReceipt)
     Ok(added)
 }
 
-fn insert_receipt(dest: &Connection, parsed: &ParsedReceipt) -> Result<()> {
+fn insert_receipt(dest: &Connection, parsed: &ParsedReceipt, source: Option<&Path>) -> Result<()> {
     let items: Vec<&ParsedLine> = parsed
         .items
         .iter()
@@ -251,7 +253,221 @@ fn insert_receipt(dest: &Connection, parsed: &ParsedReceipt) -> Result<()> {
             ],
         )?;
     }
+    if let Some(source) = source {
+        let _ = remember_receipt_file(dest, invoice_id, source);
+    }
     Ok(())
+}
+
+fn remember_receipt_file(dest: &Connection, invoice_id: i64, source: &Path) -> Result<()> {
+    let stored: String = dest
+        .query_row(
+            "SELECT ifnull(source_file, '') FROM invoices WHERE id = ?1",
+            params![invoice_id],
+            |row| row.get(0),
+        )
+        .unwrap_or_default();
+    if !stored.trim().is_empty() && Path::new(stored.trim()).is_file() {
+        return Ok(());
+    }
+    let path =
+        archive_receipt_file(dest, invoice_id, source).unwrap_or_else(|_| source.to_path_buf());
+    dest.execute(
+        "UPDATE invoices SET source_file = ?1 WHERE id = ?2",
+        params![path.display().to_string(), invoice_id],
+    )?;
+    Ok(())
+}
+
+fn archive_receipt_file(dest: &Connection, invoice_id: i64, source: &Path) -> Result<PathBuf> {
+    let store: String = dest.query_row(
+        "SELECT store FROM invoices WHERE id = ?1",
+        params![invoice_id],
+        |row| row.get(0),
+    )?;
+    let db = dest
+        .path()
+        .map(PathBuf::from)
+        .ok_or_else(|| Error::Message("database path is missing".into()))?;
+    let root = db
+        .parent()
+        .ok_or_else(|| Error::Message("database directory is missing".into()))?
+        .join("receipts")
+        .join(store);
+    fs::create_dir_all(&root).map_err(|err| Error::Message(err.to_string()))?;
+    let name = source
+        .file_name()
+        .ok_or_else(|| Error::Message("receipt file has no name".into()))?;
+    let dest_path = root.join(name);
+    if source != dest_path {
+        fs::copy(source, &dest_path).map_err(|err| Error::Message(err.to_string()))?;
+    }
+    Ok(dest_path)
+}
+
+/// Where Bring Fast keeps a receipt scan: the stored path, then
+/// `receipts/<store>/<invoice>.pdf` (and the `order-` name) under this
+/// app, `BRINGFAST_DATA`, and `~/.bring-fast`.
+pub fn locate_receipt_file(
+    data_dir: &Path,
+    store: &str,
+    invoice_no: &str,
+    stored: &str,
+) -> Option<PathBuf> {
+    let stored = stored.trim();
+    if !stored.is_empty() {
+        let path = PathBuf::from(stored);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+    let mut roots = vec![data_dir.join("receipts")];
+    if let Ok(extra) = std::env::var("BRINGFAST_DATA") {
+        let extra = extra.trim();
+        if !extra.is_empty() {
+            roots.push(PathBuf::from(extra).join("receipts"));
+        }
+    }
+    roots.push(crate::home_dir().join(".bring-fast/receipts"));
+    let folded: String = store
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .flat_map(|c| c.to_lowercase())
+        .collect();
+    let mut folders = vec![store.to_string()];
+    if !folded.is_empty() && folded != store {
+        folders.push(folded);
+    }
+    let mut names = Vec::new();
+    let mut push_name = |raw: &str| {
+        let raw = raw.trim();
+        if raw.is_empty() || names.iter().any(|have: &String| have == raw) {
+            return;
+        }
+        names.push(raw.to_string());
+        let safe: String = raw
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+            .collect();
+        if !safe.is_empty() && !names.iter().any(|have| have == &safe) {
+            names.push(safe);
+        }
+    };
+    push_name(invoice_no);
+    if let Some(rest) = invoice_no.strip_prefix("order-") {
+        push_name(rest);
+    } else {
+        push_name(&format!("order-{invoice_no}"));
+    }
+    const EXTS: &[&str] = &["pdf", "html", "htm", "png", "jpg", "jpeg", "webp", "gif"];
+    for root in roots {
+        for folder in &folders {
+            for name in &names {
+                for ext in EXTS {
+                    let path = root.join(folder).join(format!("{name}.{ext}"));
+                    if path.is_file() {
+                        return Some(path);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Page images for a receipt file. A picture is itself. A PDF is rendered
+/// with the same `pdftoppm` pass Bring Fast uses. HTML has no native page.
+pub fn receipt_page_images(path: &Path) -> Vec<PathBuf> {
+    let ext = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "webp" | "gif") {
+        return vec![path.to_path_buf()];
+    }
+    if ext != "pdf" {
+        return Vec::new();
+    }
+    let Some(parent) = path.parent() else {
+        return Vec::new();
+    };
+    let dest = parent.join("_preview");
+    let stem = path
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or("receipt");
+    let _ = fs::create_dir_all(&dest);
+    let mut found = preview_pngs(&dest, stem);
+    if !found.is_empty() {
+        return found;
+    }
+    let prefix = dest.join(stem);
+    for bin in ["pdftoppm", "pdftocairo"] {
+        let ok = Command::new(bin)
+            .args(["-png", "-r", "110"])
+            .arg(path)
+            .arg(&prefix)
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false);
+        if ok {
+            found = preview_pngs(&dest, stem);
+            if !found.is_empty() {
+                return found;
+            }
+        }
+    }
+    Vec::new()
+}
+
+fn preview_pngs(dir: &Path, stem: &str) -> Vec<PathBuf> {
+    let mut pages = Vec::new();
+    let Ok(entries) = fs::read_dir(dir) else {
+        return pages;
+    };
+    let prefix = format!("{stem}-");
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if name.starts_with(&prefix) && name.to_ascii_lowercase().ends_with(".png") {
+            pages.push(path);
+        }
+    }
+    pages.sort();
+    pages
+}
+
+impl App {
+    /// The original receipt file for this invoice, when one was imported.
+    pub fn receipt_attachment(&self, invoice_id: i64) -> Result<Option<PathBuf>> {
+        let row = self.with_conn(|conn| {
+            conn.query_row(
+                "SELECT store, invoice_no, ifnull(source_file, '') FROM invoices WHERE id = ?1",
+                params![invoice_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(Error::from)
+        })?;
+        let Some((store, invoice_no, stored)) = row else {
+            return Ok(None);
+        };
+        Ok(locate_receipt_file(
+            self.data_dir(),
+            &store,
+            &invoice_no,
+            &stored,
+        ))
+    }
 }
 
 fn read_receipt(path: &Path) -> Option<ParsedReceipt> {
@@ -1469,10 +1685,26 @@ fn trailing_money(text: &str) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::{
-        html_to_text, parse_careem, parse_carrefour, parse_grandiose, parse_mmi, read_receipt,
+        html_to_text, locate_receipt_file, parse_careem, parse_carrefour, parse_grandiose,
+        parse_mmi, read_receipt,
     };
     use crate::model::StoreId;
     use std::fs;
+
+    #[test]
+    fn a_receipt_file_is_found_under_the_store_and_the_order_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("receipts/carrefour");
+        fs::create_dir_all(&folder).unwrap();
+        let file = folder.join("order-1001.png");
+        fs::write(&file, b"png").unwrap();
+        let found = locate_receipt_file(dir.path(), "carrefour", "1001", "").unwrap();
+        assert_eq!(found, file);
+        let stored =
+            locate_receipt_file(dir.path(), "carrefour", "missing", file.to_str().unwrap());
+        assert_eq!(stored.unwrap(), file);
+        assert!(locate_receipt_file(dir.path(), "carrefour", "nope", "").is_none());
+    }
 
     const CF: &str = "
 Invoice No. : 93084417

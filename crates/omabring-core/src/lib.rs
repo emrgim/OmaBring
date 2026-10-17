@@ -23,6 +23,7 @@ pub use household::{
     PurchasePoint, StorePrice,
 };
 pub use model::*;
+pub use receipts::receipt_page_images;
 pub use theme::{
     active_stylesheet, load_active_palette, load_palette_path, load_palette_str, load_window_theme,
     resolve_theme_dir, theme_watch_paths, Palette,

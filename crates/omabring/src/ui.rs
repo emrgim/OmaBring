@@ -67,6 +67,7 @@ struct Shell {
     window: adw::ApplicationWindow,
     toast: adw::ToastOverlay,
     content: gtk::Box,
+    pinned: gtk::Box,
     tab_search: gtk::Button,
     tab_dash: gtk::Button,
     tab_buy: gtk::Button,
@@ -102,6 +103,7 @@ struct Shell {
     bar_focus: Option<String>,
     vote_guard: Rc<Cell<bool>>,
     bar_hit: Rc<Cell<bool>>,
+    receipt_back: Page,
 }
 
 struct Prod {
@@ -129,6 +131,9 @@ pub fn open_window(app: &adw::Application, core: Arc<App>, backend: Arc<Registry
         window.set_size_request(width, height);
     }
     window.add_css_class("omabring");
+    if width < 600 {
+        window.add_css_class("bf-compact");
+    }
     window.set_decorated(false);
     let provider = if css_disabled() {
         None
@@ -155,12 +160,19 @@ pub fn open_window(app: &adw::Application, core: Arc<App>, backend: Arc<Registry
         follow_theme(provider);
     }
     window.present();
-    if std::env::var("OMABRING_SHOT_SCROLL").ok().as_deref() == Some("1") {
-        let window = window.clone();
-        glib::timeout_add_local(std::time::Duration::from_millis(700), move || {
-            scroll_main(&window, 260.0);
-            ControlFlow::Break
-        });
+    if let Ok(raw) = std::env::var("OMABRING_SHOT_SCROLL") {
+        let by = if raw == "1" {
+            260.0
+        } else {
+            raw.parse::<f64>().unwrap_or(0.0)
+        };
+        if by > 0.0 {
+            let window = window.clone();
+            glib::timeout_add_local(std::time::Duration::from_millis(700), move || {
+                scroll_main(&window, by);
+                ControlFlow::Break
+            });
+        }
     }
     let backup = shell.borrow().core.clone();
     std::thread::spawn(move || {
@@ -268,6 +280,9 @@ fn build_chrome(
     };
     let filters = gtk::Box::new(gtk::Orientation::Vertical, 2);
     filters.add_css_class("bf-pin");
+    let pinned = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    pinned.add_css_class("bf-pin-chart");
+    pinned.set_visible(false);
     let agent_button = agent_button();
     let service = gtk::Label::new(Some(""));
     service.set_xalign(0.0);
@@ -284,6 +299,7 @@ fn build_chrome(
         window: window.clone(),
         toast: toast.clone(),
         content: gtk::Box::new(gtk::Orientation::Vertical, 4),
+        pinned,
         tab_search: tab("Search"),
         tab_dash: tab("Dashboard"),
         tab_buy: tab("Purchases"),
@@ -319,6 +335,7 @@ fn build_chrome(
         bar_focus: None,
         vote_guard: Rc::new(Cell::new(false)),
         bar_hit: Rc::new(Cell::new(false)),
+        receipt_back: Page::Purchases,
     }));
     let shell_entry = shell.clone();
     let entry = shell.borrow().search_entry.clone();
@@ -388,8 +405,10 @@ fn chrome_root(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
     shell.borrow().content.set_margin_start(6);
     shell.borrow().content.set_margin_end(6);
     scroll.set_propagate_natural_width(false);
+    scroll.set_propagate_natural_height(false);
     root.append(&header);
     root.append(&shell.borrow().filters);
+    root.append(&shell.borrow().pinned);
     root.append(&scroll);
     let outside = gtk::GestureClick::new();
     outside.set_propagation_phase(gtk::PropagationPhase::Bubble);
@@ -455,10 +474,11 @@ fn render(shell: &Rc<RefCell<Shell>>) {
     }
     update_tabs(shell);
     paint_filters(shell);
+    paint_pinned(shell);
     let page = shell.borrow().page.clone();
     let body: gtk::Widget = match page {
         Page::Search => search_page(shell).upcast(),
-        Page::Dashboard => board(shell, false).upcast(),
+        Page::Dashboard => dashboard_body(shell).upcast(),
         Page::Purchases => purchases(shell).upcast(),
         Page::Stores => stores_page(shell).upcast(),
         Page::Settings => settings_page(shell).upcast(),
@@ -628,6 +648,10 @@ fn install_keys(window: &adw::ApplicationWindow, shell: &Rc<RefCell<Shell>>) {
     keys.connect_key_pressed(move |_, key, _, state| {
         if shell.borrow().consent_open.get() {
             return glib::Propagation::Proceed;
+        }
+        if key == gtk::gdk::Key::Escape && matches!(shell.borrow().page, Page::Receipt(_)) {
+            close_receipt(&shell);
+            return glib::Propagation::Stop;
         }
         if key == gtk::gdk::Key::Escape && shell.borrow().bar_focus.is_some() {
             shell.borrow_mut().bar_focus = None;
@@ -837,12 +861,31 @@ fn forecast_page(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
     page
 }
 
+fn paint_pinned(shell: &Rc<RefCell<Shell>>) {
+    let pinned = shell.borrow().pinned.clone();
+    while let Some(child) = pinned.first_child() {
+        pinned.remove(&child);
+    }
+    let show = matches!(shell.borrow().page, Page::Dashboard | Page::Purchases);
+    pinned.set_visible(show);
+    if show {
+        let purchases = matches!(shell.borrow().page, Page::Purchases);
+        pinned.append(&spend_chart(shell, purchases));
+    }
+}
+
+fn dashboard_body(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
+    let page = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    let view = load_view(shell);
+    page.append(&trend_card(&view.products));
+    page.append(&product_table(shell, &view.products, false));
+    page
+}
+
 fn purchases(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
     let page = gtk::Box::new(gtk::Orientation::Vertical, 4);
-    page.append(&board(shell, true));
     let view = load_view(shell);
-    page.append(&receipt_list(shell, &view.invoices));
-    page.append(&product_table(shell, &view.products, true));
+    page.append(&purchase_cards(shell, &view.products));
 
     let import = gtk::Button::with_label("IMPORT RECEIPT");
     import.add_css_class("bf-ghost");
@@ -860,12 +903,20 @@ fn purchases(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
     page
 }
 
-fn board(shell: &Rc<RefCell<Shell>>, purchases: bool) -> gtk::Box {
-    let page = gtk::Box::new(gtk::Orientation::Vertical, 4);
+/// The spend chart. It stays above the scroller on Dashboard and Purchases.
+fn spend_chart(shell: &Rc<RefCell<Shell>>, purchases: bool) -> gtk::Box {
     let dash = gtk::Box::new(gtk::Orientation::Vertical, 6);
     dash.add_css_class("bf-card");
     dash.add_css_class("bf-dash");
-    let top = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let narrow = crate::window_size().0 < 600;
+    let top = gtk::Box::new(
+        if narrow {
+            gtk::Orientation::Vertical
+        } else {
+            gtk::Orientation::Horizontal
+        },
+        6,
+    );
     let titles = gtk::Box::new(gtk::Orientation::Vertical, 2);
     titles.set_hexpand(true);
     titles.set_halign(gtk::Align::Start);
@@ -915,19 +966,117 @@ fn board(shell: &Rc<RefCell<Shell>>, purchases: bool) -> gtk::Box {
         view.end
     )));
     fine.add_css_class("bf-muted");
+    fine.set_wrap(true);
+    fine.set_max_width_chars(36);
     fine.set_xalign(0.0);
     avg.append(&who);
     avg.append(&delta);
     avg.append(&fine);
     dash.append(&avg);
     dash.append(&spend_bars(shell, &view.buckets));
-    page.append(&dash);
+    dash
+}
 
-    if !purchases {
-        page.append(&trend_card(&view.products));
-        page.append(&product_table(shell, &view.products, false));
+fn purchase_cards(shell: &Rc<RefCell<Shell>>, products: &[Prod]) -> gtk::Box {
+    let page = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    let sorts = gtk::FlowBox::new();
+    sorts.set_selection_mode(gtk::SelectionMode::None);
+    sorts.set_column_spacing(4);
+    sorts.set_row_spacing(2);
+    let per_line = if crate::window_size().0 < 600 { 4 } else { 7 };
+    sorts.set_min_children_per_line(2);
+    sorts.set_max_children_per_line(per_line);
+    sorts.set_homogeneous(false);
+    sorts.set_hexpand(true);
+    for (text, key) in [
+        ("Product", SortKey::Name),
+        ("Last", SortKey::Last),
+        ("Times", SortKey::Times),
+        ("Units", SortKey::Qty),
+        ("Frequency", SortKey::Frequency),
+        ("Likely", SortKey::Likely),
+        ("Spent", SortKey::Spent),
+    ] {
+        sorts.insert(&sort_header(shell, text, key, 0, false), -1);
+    }
+    sorts.insert(&shortage_header(shell), -1);
+    page.append(&sorts);
+    if products.is_empty() {
+        let empty = gtk::Label::new(Some(if shell.borrow().shortage {
+            "Nothing is short in this range."
+        } else {
+            "No invoices yet."
+        }));
+        empty.add_css_class("bf-muted");
+        empty.set_xalign(0.0);
+        page.append(&empty);
+        return page;
+    }
+    for product in products {
+        page.append(&purchase_card(shell, product));
     }
     page
+}
+
+fn purchase_card(shell: &Rc<RefCell<Shell>>, product: &Prod) -> gtk::Box {
+    let card = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    card.add_css_class("bf-card");
+    card.add_css_class("bf-mcard");
+    card.append(&product_thumb(shell, &product.name, 56));
+    let copy = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    copy.set_hexpand(true);
+    copy.set_halign(gtk::Align::Fill);
+    let top = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let name = gtk::Label::new(Some(&product.name));
+    name.add_css_class("bf-name");
+    name.set_xalign(0.0);
+    name.set_hexpand(true);
+    name.set_wrap(true);
+    name.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+    let price = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    price.set_halign(gtk::Align::End);
+    price.set_valign(gtk::Align::Start);
+    let amount = gtk::Label::new(Some(&format!("AED {:.0}", product.spent)));
+    amount.add_css_class("bf-price");
+    amount.set_xalign(1.0);
+    let buys = gtk::Label::new(Some(&format!("{} buys", product.times)));
+    buys.add_css_class("bf-muted");
+    buys.set_xalign(1.0);
+    price.append(&amount);
+    price.append(&buys);
+    top.append(&name);
+    top.append(&price);
+    copy.append(&top);
+    let meta = gtk::Label::new(Some(&format!(
+        "{} · last {}",
+        frequency_label(product),
+        product.last.format("%Y-%m-%d")
+    )));
+    meta.add_css_class("bf-muted");
+    meta.set_xalign(0.0);
+    meta.set_wrap(true);
+    meta.set_hexpand(true);
+    let foot = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    foot.append(&meta);
+    foot.append(&likely_votes(shell, &product.name, product.likely));
+    copy.append(&foot);
+    card.append(&copy);
+    let click = gtk::GestureClick::new();
+    let shell_click = shell.clone();
+    let product_name = product.name.clone();
+    let guard = shell.borrow().vote_guard.clone();
+    click.connect_released(move |_, _, _, _| {
+        if guard.replace(false) {
+            return;
+        }
+        let mut shell = shell_click.borrow_mut();
+        shell.compare_for.clear();
+        shell.page = Page::Product(product_name.clone());
+        drop(shell);
+        schedule(&shell_click);
+    });
+    card.add_controller(click);
+    card
 }
 
 fn grain_row(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
@@ -953,7 +1102,16 @@ fn grain_row(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
 }
 
 fn range_row(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
+    let narrow = crate::window_size().0 < 600;
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+    let flow = gtk::FlowBox::new();
+    flow.set_selection_mode(gtk::SelectionMode::None);
+    flow.set_column_spacing(4);
+    flow.set_row_spacing(2);
+    flow.set_homogeneous(false);
+    flow.set_hexpand(true);
+    flow.set_min_children_per_line(if narrow { 4 } else { 8 });
+    flow.set_max_children_per_line(if narrow { 4 } else { 8 });
     let custom = shell.borrow().custom;
     let days = shell.borrow().range_days;
     for (len, label) in [
@@ -977,8 +1135,9 @@ fn range_row(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
             drop(shell);
             schedule(&shell_click);
         });
-        row.append(&button);
+        flow.insert(&button, -1);
     }
+    row.append(&flow);
     row
 }
 
@@ -1020,10 +1179,25 @@ struct BarLayout {
 }
 
 fn bar_layout(count: usize) -> BarLayout {
-    let height = if count <= 6 { 72.0 } else { 52.0 };
+    let (_, window_h, _) = crate::window_size();
+    let mut height: f64 = if count <= 6 { 72.0 } else { 52.0 };
+    if window_h < 360 {
+        height *= 0.4;
+    } else if window_h < 480 {
+        height *= 0.55;
+    }
+    height = height.max(24.0);
     // A handful of bars keep a modest width and sit in the centre.
     // More than that share the card, with no per-bar minimum.
-    let width = if count > 0 && count <= 6 { 56 } else { -1 };
+    let width = if count > 0 && count <= 6 {
+        if crate::window_size().0 < 600 {
+            40
+        } else {
+            56
+        }
+    } else {
+        -1
+    };
     BarLayout {
         width,
         height,
@@ -2087,40 +2261,71 @@ fn store_prices(item: &omabring_core::ProductHistory) -> gtk::Box {
 }
 
 fn purchase_list(shell: &Rc<RefCell<Shell>>, item: &omabring_core::ProductHistory) -> gtk::Box {
+    // Same buy rows as Bring Fast `purchase_detail.html`: date, store, qty,
+    // the receipt number, and the price. The number opens that receipt.
     let card = gtk::Box::new(gtk::Orientation::Vertical, 0);
     card.add_css_class("bf-card");
-    let kicker = gtk::Label::new(Some("PURCHASES"));
-    kicker.add_css_class("bf-kicker");
-    kicker.set_xalign(0.0);
-    card.append(&kicker);
+    let product = item.name.clone();
     for point in item.points.iter().rev() {
-        let line = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-        line.add_css_class("bf-row");
-        let date = cell(&point.date.format("%Y-%m-%d").to_string(), 96, false);
-        let when = cell(
-            &format!("{} · #{}", store_label(point.store), point.invoice_no),
-            0,
-            false,
-        );
-        when.set_hexpand(true);
-        line.append(&date);
-        line.append(&when);
-        line.append(&cell(
-            &format!("AED {:.2} · {} u", point.unit_price, qty_text(point.qty)),
-            160,
-            true,
-        ));
+        let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        line.add_css_class("bf-buy");
+        let text = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        text.set_hexpand(true);
+        let when = gtk::Label::new(Some(&point.date.format("%Y-%m-%d").to_string()));
+        when.add_css_class("bf-brand");
+        when.set_xalign(0.0);
+        let tail = if point.invoice_no.chars().count() > 10 {
+            point
+                .invoice_no
+                .chars()
+                .skip(point.invoice_no.chars().count() - 10)
+                .collect::<String>()
+        } else {
+            point.invoice_no.clone()
+        };
+        let meta = gtk::Label::new(Some(&format!(
+            "{} · {} u · #{}",
+            store_label(point.store),
+            qty_text(point.qty),
+            tail
+        )));
+        meta.add_css_class("bf-muted");
+        meta.set_xalign(0.0);
+        meta.set_wrap(true);
+        meta.set_hexpand(true);
+        text.append(&when);
+        text.append(&meta);
+        let amt = gtk::Label::new(Some(&format!("AED {:.2}", point.unit_price)));
+        amt.add_css_class("bf-price");
+        amt.set_halign(gtk::Align::End);
+        amt.set_valign(gtk::Align::Start);
+        line.append(&text);
+        line.append(&amt);
         let click = gtk::GestureClick::new();
         let shell_click = shell.clone();
         let id = point.invoice_id;
+        let back = product.clone();
         click.connect_released(move |_, _, _, _| {
-            shell_click.borrow_mut().page = Page::Receipt(id);
-            schedule(&shell_click);
+            open_receipt(&shell_click, id, Page::Product(back.clone()));
         });
         line.add_controller(click);
         card.append(&line);
     }
     card
+}
+
+fn open_receipt(shell: &Rc<RefCell<Shell>>, id: i64, back: Page) {
+    {
+        let mut state = shell.borrow_mut();
+        state.receipt_back = back;
+        state.page = Page::Receipt(id);
+    }
+    schedule(shell);
+}
+
+fn close_receipt(shell: &Rc<RefCell<Shell>>) {
+    let back = shell.borrow().receipt_back.clone();
+    select_page(shell, back);
 }
 
 fn product_thumb(shell: &Rc<RefCell<Shell>>, name: &str, size: i32) -> gtk::Widget {
@@ -2685,17 +2890,26 @@ fn import_card(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
 }
 
 fn receipt_page(shell: &Rc<RefCell<Shell>>, id: i64) -> gtk::Box {
+    // Bring Fast `templates/receipt.html`, opened the way `purchase_detail.html`
+    // opens it: a Receipt header and Close, then the scan or the built slip.
     let page = gtk::Box::new(gtk::Orientation::Vertical, 4);
-    let back = gtk::Button::with_label("PURCHASES");
-    back.add_css_class("bf-ghost");
-    back.set_halign(gtk::Align::Start);
-    let shell_back = shell.clone();
-    back.connect_clicked(move |_| select_page(&shell_back, Page::Purchases));
-    page.append(&back);
+    let header = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    header.add_css_class("bf-thead");
+    let title = gtk::Label::new(Some("Receipt"));
+    title.add_css_class("bf-brand");
+    title.set_hexpand(true);
+    title.set_xalign(0.0);
+    let close = gtk::Button::with_label("Close");
+    close.add_css_class("bf-ghost");
+    let shell_close = shell.clone();
+    close.connect_clicked(move |_| close_receipt(&shell_close));
+    header.append(&title);
+    header.append(&close);
+    page.append(&header);
 
     let invoices = shell.borrow().core.list_invoices().unwrap_or_default();
     let invoice = if id == 0 {
-        invoices.last().cloned()
+        invoices.first().cloned()
     } else {
         invoices.into_iter().find(|invoice| invoice.id == id)
     };
@@ -2707,18 +2921,65 @@ fn receipt_page(shell: &Rc<RefCell<Shell>>, id: i64) -> gtk::Box {
         return page;
     };
 
+    let attachment = shell
+        .borrow()
+        .core
+        .receipt_attachment(invoice.id)
+        .ok()
+        .flatten();
+    let pages = attachment
+        .as_ref()
+        .map(|path| omabring_core::receipt_page_images(path))
+        .unwrap_or_default();
+    if !pages.is_empty() {
+        let (width, _, _) = crate::window_size();
+        let max_width = (width - 28).max(120);
+        for path in pages {
+            if let Some(picture) = receipt_picture(&path, max_width) {
+                page.append(&picture);
+            }
+        }
+        return page;
+    }
+    if let Some(path) = attachment {
+        let open = gtk::Button::with_label("Open the receipt");
+        open.add_css_class("bf-ghost");
+        open.set_halign(gtk::Align::Start);
+        open.connect_clicked(move |_| {
+            let _ = std::process::Command::new("xdg-open").arg(&path).spawn();
+        });
+        page.append(&open);
+        let note = gtk::Label::new(Some(
+            "Open the receipt. This file cannot be drawn in the window.",
+        ));
+        note.add_css_class("bf-muted");
+        note.set_xalign(0.0);
+        note.set_wrap(true);
+        page.append(&note);
+        return page;
+    }
+
+    page.append(&receipt_slip(&invoice));
+    let note = gtk::Label::new(Some("No attachment"));
+    note.add_css_class("bf-muted");
+    note.set_xalign(0.0);
+    page.append(&note);
+    page
+}
+
+fn receipt_slip(invoice: &InvoiceSummary) -> gtk::Box {
     let slip = gtk::Box::new(gtk::Orientation::Vertical, 6);
     slip.add_css_class("bf-card");
     let title = heading(&store_label(invoice.store).to_uppercase());
     title.add_css_class("bf-h1-sm");
-    let date = gtk::Label::new(Some(&invoice.purchased_on));
-    date.add_css_class("bf-brand");
-    date.set_xalign(0.0);
-    let meta = gtk::Label::new(Some(&format!("#{}", invoice.invoice_no)));
+    let meta = gtk::Label::new(Some(&format!(
+        "{} · #{}",
+        invoice.purchased_on, invoice.invoice_no
+    )));
     meta.add_css_class("bf-muted");
     meta.set_xalign(0.0);
+    meta.set_wrap(true);
     slip.append(&title);
-    slip.append(&date);
     slip.append(&meta);
 
     let head = gtk::Box::new(gtk::Orientation::Horizontal, 4);
@@ -2737,23 +2998,43 @@ fn receipt_page(shell: &Rc<RefCell<Shell>>, id: i64) -> gtk::Box {
         row.add_css_class("bf-row");
         let name = cell(&line.name, 0, false);
         name.set_hexpand(true);
+        name.set_wrap(true);
         row.append(&name);
-        row.append(&cell(&format!("{:.2}", line.qty), 72, true));
+        row.append(&cell(&qty_text(line.qty), 72, true));
         row.append(&cell(&format!("{:.2}", line.line_total), 96, true));
         slip.append(&row);
     }
     let total = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-    let label = gtk::Label::new(Some("TOTAL"));
+    let label = gtk::Label::new(Some("Total"));
     label.add_css_class("bf-brand");
     label.set_hexpand(true);
     label.set_xalign(0.0);
-    let figure = gtk::Label::new(Some(&format!("{} {:.2}", invoice.currency, invoice.total)));
+    let figure = gtk::Label::new(Some(&format!("AED {:.2}", invoice.total)));
     figure.add_css_class("bf-delta");
     total.append(&label);
     total.append(&figure);
     slip.append(&total);
-    page.append(&slip);
-    page
+    slip
+}
+
+fn receipt_picture(path: &std::path::Path, max_width: i32) -> Option<gtk::Widget> {
+    let texture = gtk::gdk::Texture::from_filename(path).ok()?;
+    let src_w = texture.width().max(1);
+    let src_h = texture.height().max(1);
+    let out_w = src_w.min(max_width).max(1);
+    let out_h = ((src_h as f64) * (out_w as f64) / (src_w as f64))
+        .round()
+        .clamp(1.0, 2400.0) as i32;
+    let picture = gtk::Picture::for_paintable(&texture);
+    picture.set_can_shrink(true);
+    picture.set_content_fit(gtk::ContentFit::Contain);
+    picture.set_size_request(-1, out_h.min(src_h));
+    picture.set_hexpand(true);
+    picture.set_halign(gtk::Align::Fill);
+    picture.set_vexpand(false);
+    picture.add_css_class("bf-receipt");
+    picture.set_width_request(out_w.min(max_width));
+    Some(picture.upcast())
 }
 
 struct SpendBucket {
@@ -2770,7 +3051,6 @@ struct ViewData {
     total: f64,
     average: f64,
     receipts: usize,
-    invoices: Vec<InvoiceSummary>,
     buckets: Vec<SpendBucket>,
     products: Vec<Prod>,
 }
@@ -2838,71 +3118,15 @@ fn load_view(shell: &Rc<RefCell<Shell>>) -> ViewData {
     if shortage {
         products.retain(|product| is_shortage(product, today));
     }
-    let mut invoices: Vec<InvoiceSummary> = shown.into_iter().cloned().collect();
-    invoices.sort_by(|a, b| {
-        b.purchased_on
-            .cmp(&a.purchased_on)
-            .then(b.invoice_no.cmp(&a.invoice_no))
-    });
     ViewData {
         start,
         end,
         total,
         average: total / periods,
-        receipts: invoices.len(),
-        invoices,
+        receipts: shown.len(),
         buckets,
         products,
     }
-}
-
-fn receipt_list(shell: &Rc<RefCell<Shell>>, invoices: &[InvoiceSummary]) -> gtk::Box {
-    let card = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    card.add_css_class("bf-card");
-    let kicker = gtk::Label::new(Some(&format!("RECEIPTS · {}", invoices.len())));
-    kicker.add_css_class("bf-kicker");
-    kicker.set_xalign(0.0);
-    card.append(&kicker);
-    let head = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-    head.add_css_class("bf-thead");
-    head.append(&cell("Date", 78, false));
-    let store = cell("Store", 0, false);
-    store.set_hexpand(true);
-    head.append(&store);
-    head.append(&cell("Receipt", 110, false));
-    head.append(&cell("Total", 78, true));
-    card.append(&head);
-    if invoices.is_empty() {
-        let empty = gtk::Label::new(Some("No receipts in this range."));
-        empty.add_css_class("bf-muted");
-        empty.set_xalign(0.0);
-        card.append(&empty);
-        return card;
-    }
-    for invoice in invoices {
-        let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-        row.add_css_class("bf-row");
-        row.append(&cell(&invoice.purchased_on, 78, false));
-        let store = cell(&store_label(invoice.store), 0, false);
-        store.set_hexpand(true);
-        row.append(&store);
-        row.append(&cell(&format!("#{}", invoice.invoice_no), 110, false));
-        row.append(&cell(
-            &format!("{} {:.2}", invoice.currency, invoice.total),
-            78,
-            true,
-        ));
-        let click = gtk::GestureClick::new();
-        let shell_click = shell.clone();
-        let id = invoice.id;
-        click.connect_released(move |_, _, _, _| {
-            shell_click.borrow_mut().page = Page::Receipt(id);
-            schedule(&shell_click);
-        });
-        row.add_controller(click);
-        card.append(&row);
-    }
-    card
 }
 
 fn next_label(next: &str) -> String {
@@ -3624,7 +3848,7 @@ fn seed_demo(core: &App) {
         (220, "waitrose", "W-0902", "Milk", 1.0, 8.10),
         (40, "carrefour", "A-1001", "Milk", 2.0, 8.50),
         (26, "carrefour", "A-1003", "Milk", 1.0, 8.75),
-        (12, "union_coop", "U-2008", "Milk", 1.0, 9.10),
+        (1, "union_coop", "U-2008", "Milk", 1.0, 9.10),
         (3, "carrefour", "A-1002", "Bread", 1.0, 4.25),
         (6, "union_coop", "U-2001", "Eggs", 1.0, 12.00),
         (8, "grandiose", "G-3001", "Water", 6.0, 2.15),
@@ -3638,6 +3862,14 @@ fn seed_demo(core: &App) {
         (222, "carrefour", "C-3", "Coca Cola Zero", 1.0, 3.50),
         (219, "carrefour", "C-4", "Coca Cola Zero", 1.0, 3.50),
         (216, "carrefour", "C-5", "Coca Cola Zero", 1.0, 3.50),
+        (4, "waitrose", "W-1010", "Yogurt", 2.0, 6.40),
+        (5, "spinneys", "S-1011", "Pasta", 1.0, 7.80),
+        (7, "carrefour", "A-1012", "Tea", 1.0, 14.50),
+        (9, "grandiose", "G-1013", "Juice", 1.0, 9.25),
+        (11, "union_coop", "U-1014", "Butter", 1.0, 11.00),
+        (13, "waitrose", "W-1015", "Cheese", 1.0, 16.75),
+        (16, "carrefour", "A-1016", "Apples", 1.0, 8.90),
+        (18, "spinneys", "S-1017", "Oats", 1.0, 12.40),
     ];
     for (days_ago, store, invoice_no, name, qty, price) in rows {
         let date = today - Duration::days(days_ago);
@@ -3674,6 +3906,12 @@ fn seed_demo(core: &App) {
     ] {
         let _ = core.store_product_image(name, bytes);
     }
+    let receipt_dir = core.data_dir().join("receipts/union_coop");
+    let _ = std::fs::create_dir_all(&receipt_dir);
+    let _ = std::fs::write(
+        receipt_dir.join("U-2008.png"),
+        include_bytes!("../../../assets/demo/receipt.png"),
+    );
     let _ = core.cart_add(
         StoreId::Carrefour,
         "milk",

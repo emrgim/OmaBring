@@ -489,6 +489,9 @@ pub(crate) fn ensure_household(conn: &rusqlite::Connection) -> Result<()> {
             [],
         )?;
     }
+    if !crate::column_exists(conn, "invoices", "source_file")? {
+        conn.execute("ALTER TABLE invoices ADD COLUMN source_file TEXT", [])?;
+    }
     purge_junk_lines(conn)?;
     Ok(())
 }

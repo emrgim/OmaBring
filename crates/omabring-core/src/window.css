@@ -153,6 +153,12 @@ window.omabring button.bf-chip label {
   min-height: 0;
 }
 
+window.omabring.bf-compact button.bf-tab,
+window.omabring.bf-compact button.bf-tab label {
+  padding: 1px 3px;
+  font-size: 10px;
+}
+
 window.omabring button.bf-tab,
 window.omabring button.bf-tab label {
   background-color: transparent;
@@ -195,6 +201,29 @@ window.omabring .bf-card {
 
 window.omabring .bf-dash {
   padding: 4px 6px 2px;
+}
+
+window.omabring .bf-pin-chart {
+  background-color: var(--omabring-bg);
+  padding: 2px 6px 4px;
+}
+
+window.omabring .bf-mcard {
+  padding: 8px;
+}
+
+window.omabring .bf-mcard .bf-name,
+window.omabring .bf-price {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+window.omabring .bf-buy {
+  padding: 8px 2px;
+}
+
+window.omabring picture.bf-receipt {
+  background-color: transparent;
 }
 
 window.omabring .bf-filters,
