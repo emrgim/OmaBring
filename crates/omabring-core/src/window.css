@@ -19,7 +19,7 @@ window.omabring {
   background-color: var(--omabring-bg);
   color: var(--omabring-fg);
   font-family: {{ font }};
-  font-size: 11px;
+  font-size: 10px;
   border: none;
   border-radius: {{ rounding }}px;
 }
@@ -54,7 +54,7 @@ window.omabring .bf-mark {
 }
 
 window.omabring .bf-brand {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0;
 }
@@ -74,17 +74,17 @@ window.omabring .bf-field {
 
 window.omabring .bf-muted {
   color: var(--omabring-muted);
-  font-size: 11px;
+  font-size: 10px;
 }
 
 window.omabring .bf-h1 {
-  font-size: 15px;
+  font-size: 13px;
   font-weight: 700;
   letter-spacing: 0;
 }
 
 window.omabring .bf-h1-sm {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 700;
   letter-spacing: 0;
 }
@@ -102,7 +102,7 @@ window.omabring .bf-link label {
 }
 
 window.omabring .bf-delta {
-  font-size: 15px;
+  font-size: 13px;
   font-weight: 700;
 }
 
@@ -121,10 +121,10 @@ window.omabring button {
   color: var(--omabring-on-fill);
   border: 1px solid var(--omabring-fill);
   border-radius: 0;
-  padding: 2px 7px;
+  padding: 1px 5px;
   min-height: 0;
   min-width: 0;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
   box-shadow: none;
 }
@@ -153,13 +153,19 @@ window.omabring button.bf-chip label {
   min-height: 0;
 }
 
+window.omabring.bf-compact button.bf-tab,
+window.omabring.bf-compact button.bf-tab label {
+  padding: 1px 3px;
+  font-size: 10px;
+}
+
 window.omabring button.bf-tab,
 window.omabring button.bf-tab label {
   background-color: transparent;
   color: var(--omabring-muted);
   border: 1px solid transparent;
-  padding: 2px 6px;
-  font-size: 11px;
+  padding: 1px 4px;
+  font-size: 10px;
   font-weight: 700;
   letter-spacing: 0;
   min-height: 0;
@@ -190,18 +196,41 @@ window.omabring .bf-card {
   background-color: var(--omabring-bg);
   color: var(--omabring-fg);
   border: 1px solid var(--omabring-line);
-  padding: 6px 8px;
+  padding: 3px 5px;
 }
 
 window.omabring .bf-dash {
-  padding: 4px 6px 2px;
+  padding: 2px 4px 1px;
+}
+
+window.omabring .bf-pin-chart {
+  background-color: var(--omabring-bg);
+  padding: 1px 4px 2px;
+}
+
+window.omabring .bf-mcard {
+  padding: 4px 5px;
+}
+
+window.omabring .bf-mcard .bf-name,
+window.omabring .bf-price {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+window.omabring .bf-buy {
+  padding: 3px 1px;
+}
+
+window.omabring picture.bf-receipt {
+  background-color: transparent;
 }
 
 window.omabring .bf-filters,
 window.omabring .bf-pin {
   background-color: var(--omabring-bg);
   border-bottom: 1px solid var(--omabring-line);
-  padding: 2px 8px 3px;
+  padding: 1px 4px 2px;
 }
 
 window.omabring .bf-agent,
@@ -304,9 +333,9 @@ window.omabring .bf-logo {
 }
 
 window.omabring .bf-logo {
-  min-width: 32px;
-  min-height: 32px;
-  font-size: 13px;
+  min-width: 26px;
+  min-height: 26px;
+  font-size: 12px;
 }
 
 window.omabring picture.bf-logo {
@@ -330,8 +359,12 @@ window.omabring .bf-bar,
 window.omabring button.bf-bar,
 window.omabring button.bf-bar:hover {
   background-color: transparent;
+  background-image: none;
   border: none;
+  border-radius: 0;
+  box-shadow: none;
   padding: 0;
+  margin: 0;
   min-height: 0;
   min-width: 0;
 }
@@ -367,7 +400,11 @@ window.omabring button.bf-vote label {
   font-size: 10px;
 }
 
-window.omabring .bf-bar-fill,
+window.omabring .bf-bar-fill {
+  background-color: {{ accent }};
+  min-width: 0;
+}
+
 window.omabring .bf-donut {
   background-color: var(--omabring-accent);
   min-width: 0;
@@ -429,8 +466,8 @@ window.omabring spinbutton {
   border-radius: 0;
   box-shadow: none;
   min-height: 0;
-  padding: 2px 6px;
-  font-size: 11px;
+  padding: 1px 4px;
+  font-size: 10px;
 }
 
 window.omabring textview,
