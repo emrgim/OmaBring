@@ -13,8 +13,8 @@ use gtk4 as gtk;
 use libadwaita as adw;
 use libadwaita::prelude::*;
 use omabring_core::{
-    home_dir, junk_product_name, load_window_theme, theme_watch_paths, App, CartLine,
-    InvoiceSummary, Offer, StoreId,
+    home_dir, is_size_upcharge, junk_product_name, load_window_theme, theme_watch_paths, App,
+    CartLine, InvoiceSummary, Offer, StoreId,
 };
 use omabring_stores::Registry;
 
@@ -166,6 +166,13 @@ pub fn open_window(app: &adw::Application, core: Arc<App>, backend: Arc<Registry
     std::thread::spawn(move || {
         let _ = backup.backup_if_due();
     });
+    if std::env::var("OMABRING_FETCH_IMAGES").ok().as_deref() != Some("0") {
+        let images = shell.borrow().core.clone();
+        std::thread::spawn(move || {
+            let source = images.data_dir().join("omabring.db");
+            crate::backfill_images(&images, &source, None, Some(crate::BACKGROUND_IMAGE_LIMIT));
+        });
+    }
 
     let shell_for_consent = shell.clone();
     glib::timeout_add_local(std::time::Duration::from_millis(800), move || {
@@ -776,7 +783,7 @@ fn forecast_page(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
         .forecast(today)
         .unwrap_or_default()
         .into_iter()
-        .filter(|item| !junk_product_name(&item.name))
+        .filter(|item| !junk_product_name(&item.name) && !is_size_upcharge(&item.name))
         .collect();
     let card = gtk::Box::new(gtk::Orientation::Vertical, 6);
     card.add_css_class("bf-card");
@@ -2062,7 +2069,7 @@ fn store_prices(item: &omabring_core::ProductHistory) -> gtk::Box {
     for row in &item.by_store {
         let line = gtk::Box::new(gtk::Orientation::Horizontal, 4);
         line.add_css_class("bf-row");
-        line.append(&store_logo_small(row.store));
+        line.append(&store_logo(row.store));
         let name = cell(&store_label(row.store).to_uppercase(), 0, false);
         name.set_hexpand(true);
         line.append(&name);
@@ -3087,7 +3094,7 @@ fn products_from(
             continue;
         };
         for line in &invoice.lines {
-            if junk_product_name(&line.name) {
+            if junk_product_name(&line.name) || is_size_upcharge(&line.name) {
                 continue;
             }
             let key = line.name.to_lowercase();
@@ -3802,6 +3809,42 @@ mod tests {
             earliest[0].last.format("%Y-%m-%d").to_string(),
             "2026-02-01"
         );
+    }
+
+    #[test]
+    fn a_size_upcharge_is_not_its_own_product() {
+        let invoice = InvoiceSummary {
+            id: 1,
+            store: StoreId::Careem,
+            invoice_no: "P".into(),
+            purchased_on: "2026-03-01".into(),
+            currency: "AED".into(),
+            total: 55.0,
+            lines: vec![
+                InvoiceLine {
+                    name: "Pepperoni Pizza".into(),
+                    qty: 1.0,
+                    unit: "piece".into(),
+                    unit_price: 40.0,
+                    line_total: 40.0,
+                    product_key: String::new(),
+                },
+                InvoiceLine {
+                    name: "Large (13\")".into(),
+                    qty: 1.0,
+                    unit: "piece".into(),
+                    unit_price: 15.0,
+                    line_total: 15.0,
+                    product_key: String::new(),
+                },
+            ],
+        };
+        let refs = [&invoice];
+        let products = products_from(&refs, &HashMap::new(), SortKey::Spent, true);
+        assert_eq!(products.len(), 1);
+        assert_eq!(products[0].name, "Pepperoni Pizza");
+        assert!((products[0].spent - 40.0).abs() < 0.01);
+        assert!((invoice.total - 55.0).abs() < 0.01);
     }
 
     #[test]

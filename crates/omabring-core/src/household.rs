@@ -9,7 +9,7 @@ use chrono::{NaiveDate, Utc};
 use rusqlite::{params, OptionalExtension};
 
 use crate::error::{Error, Result};
-use crate::model::{junk_product_name, normalize_name, round_money, StoreId};
+use crate::model::{is_size_upcharge, junk_product_name, normalize_name, round_money, StoreId};
 use crate::{now_rfc3339, App};
 
 #[derive(Debug, Clone)]
@@ -206,6 +206,19 @@ impl App {
         self.remember_image_search_for(name, "", found)
     }
 
+    /// Decides whether a catalog request may start.
+    ///
+    /// A picture already on disk, or a search from the last seven days, skips
+    /// the network. Otherwise the miss is stored before the caller opens a
+    /// connection, so a timeout or a killed process is still remembered.
+    pub fn begin_image_search(&self, name: &str, product_key: &str) -> Result<bool> {
+        if self.product_image(name).is_some() || self.image_search_recent_for(name, product_key)? {
+            return Ok(false);
+        }
+        self.remember_image_search_for(name, product_key, false)?;
+        Ok(true)
+    }
+
     /// Records the miss or hit under the receipt name, the slug, and the product key.
     pub fn remember_image_search_for(
         &self,
@@ -351,6 +364,9 @@ impl App {
                 continue;
             };
             for line in &invoice.lines {
+                if is_size_upcharge(&line.name) {
+                    continue;
+                }
                 let key = if line.product_key.is_empty() {
                     normalize_name(&line.name)
                 } else {
@@ -1296,5 +1312,39 @@ mod tests {
         assert!(app
             .image_search_recent_for("Cheese", "name:cheese")
             .unwrap());
+    }
+
+    #[test]
+    fn a_miss_is_stored_before_the_catalog_is_asked() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = App::open(dir.path()).unwrap();
+        app.with_conn(|conn| {
+            conn.execute(
+                "INSERT INTO invoices (store, invoice_no, purchased_on, currency, total) VALUES ('careem', 'P-1', '2026-10-01', 'AED', 40)",
+                [],
+            )?;
+            let id: i64 = conn.query_row(
+                "SELECT id FROM invoices WHERE invoice_no = 'P-1'",
+                [],
+                |row| row.get(0),
+            )?;
+            conn.execute(
+                "INSERT INTO invoice_lines (invoice_id, name, name_key, qty, unit, unit_price, line_total, product_key) VALUES (?1, 'Pepperoni Pizza', ?2, 1, 'piece', 40, 40, '')",
+                params![id, normalize_name("Pepperoni Pizza")],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        assert!(app
+            .products_missing_images()
+            .unwrap()
+            .iter()
+            .any(|item| item.name == "Pepperoni Pizza"));
+        assert!(app.begin_image_search("Pepperoni Pizza", "").unwrap());
+        assert!(app.image_search_recent_for("Pepperoni Pizza", "").unwrap());
+        assert!(!app
+            .begin_image_search("Pepperoni Pizza", "name:pepperoni-pizza")
+            .unwrap());
+        assert!(app.products_missing_images().unwrap().is_empty());
     }
 }

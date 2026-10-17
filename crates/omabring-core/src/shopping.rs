@@ -6,8 +6,8 @@ use rusqlite::{params, OptionalExtension};
 use crate::crypto::{open, seal};
 use crate::error::{Error, Result};
 use crate::model::{
-    junk_product_name, normalize_name, round_money, BackendErrorKind, Cart, CartLine,
-    CheckoutRecord, Comparison, ForecastItem, ForecastStatus, GroupSpend, InvoiceLine,
+    is_size_upcharge, junk_product_name, normalize_name, round_money, BackendErrorKind, Cart,
+    CartLine, CheckoutRecord, Comparison, ForecastItem, ForecastStatus, GroupSpend, InvoiceLine,
     InvoiceSummary, LiveState, MoneyTotal, Offer, OfferSource, PriceGroup, SpendRange, SpendReport,
     StoreBackend, StoreId, StoreLink, StoreNote, StoreSecrets,
 };
@@ -259,7 +259,7 @@ impl App {
             let date = NaiveDate::parse_from_str(&invoice.purchased_on, "%Y-%m-%d")
                 .map_err(|_| Error::InvalidInvoice(invoice.purchased_on.clone()))?;
             for line in invoice.lines {
-                if junk_product_name(&line.name) {
+                if junk_product_name(&line.name) || is_size_upcharge(&line.name) {
                     continue;
                 }
                 let key = format!(
@@ -599,7 +599,10 @@ impl App {
         for invoice in invoices {
             let currency = invoice.currency.clone();
             for line in invoice.lines {
-                if junk_product_name(&line.name) || !normalize_name(&line.name).contains(&needle) {
+                if junk_product_name(&line.name)
+                    || is_size_upcharge(&line.name)
+                    || !normalize_name(&line.name).contains(&needle)
+                {
                     continue;
                 }
                 let key = format!(
@@ -1319,6 +1322,57 @@ mod tests {
         assert!(forecast
             .iter()
             .all(|item| !crate::model::junk_product_name(&item.name)));
+    }
+
+    #[test]
+    fn a_size_upcharge_stays_in_the_total_and_off_the_lists() {
+        let (_dir, app) = opened();
+        let doc = r#"{
+            "invoices": [
+                {"store": "careem", "invoice_no": "P1", "date": "2026-03-01", "currency": "AED", "items": [
+                    {"name": "Pepperoni Pizza", "qty": 1, "unit": "piece", "unit_price": 40},
+                    {"name": "Large (13\")", "qty": 1, "unit": "piece", "unit_price": 15}
+                ]},
+                {"store": "careem", "invoice_no": "P2", "date": "2026-03-15", "currency": "AED", "items": [
+                    {"name": "Pepperoni Pizza", "qty": 1, "unit": "piece", "unit_price": 40},
+                    {"name": "Large (13\")", "qty": 1, "unit": "piece", "unit_price": 15}
+                ]}
+            ]
+        }"#;
+        app.import_document(doc).unwrap();
+        let invoices = app.list_invoices().unwrap();
+        assert_eq!(invoices.len(), 2);
+        let total: f64 = invoices.iter().map(|invoice| invoice.total).sum();
+        assert!((total - 110.0).abs() < 0.01);
+        assert!(invoices.iter().all(|invoice| {
+            invoice.lines.iter().any(|line| line.name == "Large (13\")")
+                && invoice
+                    .lines
+                    .iter()
+                    .any(|line| line.name == "Pepperoni Pizza")
+        }));
+        let today = NaiveDate::from_ymd_opt(2026, 3, 16).unwrap();
+        let forecast = app.forecast(today).unwrap();
+        assert!(forecast.iter().any(|item| item.name == "Pepperoni Pizza"));
+        assert!(forecast.iter().all(|item| !is_size_upcharge(&item.name)));
+        let pizza = app.product_history("Pepperoni Pizza").unwrap();
+        assert_eq!(pizza.times, 2);
+        assert!((pizza.spent - 80.0).abs() < 0.01);
+        assert!(app
+            .product_history("Large (13\")")
+            .unwrap()
+            .points
+            .is_empty());
+        let found = app.search("large", &NoLive).unwrap();
+        assert!(found
+            .offers
+            .iter()
+            .all(|offer| !is_size_upcharge(&offer.name)));
+        let pizza_offers = app.search("pizza", &NoLive).unwrap();
+        assert!(pizza_offers
+            .offers
+            .iter()
+            .any(|offer| offer.name == "Pepperoni Pizza"));
     }
 
     fn saved_one() -> String {

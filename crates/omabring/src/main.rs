@@ -119,8 +119,10 @@ fn main() -> glib::ExitCode {
             }
             None => None,
         };
-        let fetch_images = !args.iter().any(|arg| arg == "--no-fetch-images")
-            && std::env::var("OMABRING_FETCH_IMAGES").ok().as_deref() != Some("0");
+        let fetch_images = wants_image_search(
+            &args,
+            std::env::var("OMABRING_FETCH_IMAGES").ok().as_deref(),
+        );
         return import_bringfast(
             &path,
             dry_run,
@@ -318,6 +320,7 @@ fn import_bringfast(
             &core,
             std::path::Path::new(path),
             receipts_dir.map(std::path::Path::new),
+            None,
         );
     }
     if imported {
@@ -342,6 +345,19 @@ fn parse_size(raw: &str) -> Option<(i32, i32)> {
     }
 }
 
+/// Catalog search stays off for a re-import. `--fetch-images` or
+/// `OMABRING_FETCH_IMAGES=1` turns it on. `--no-fetch-images` or
+/// `OMABRING_FETCH_IMAGES=0` forces it off.
+fn wants_image_search(args: &[String], env: Option<&str>) -> bool {
+    if args.iter().any(|arg| arg == "--no-fetch-images") || env == Some("0") {
+        return false;
+    }
+    args.iter().any(|arg| arg == "--fetch-images") || env == Some("1")
+}
+
+/// How many missing pictures the open window asks the stores for.
+pub(crate) const BACKGROUND_IMAGE_LIMIT: usize = 8;
+
 pub(crate) fn window_size() -> (i32, i32, bool) {
     if let Some(size) = std::env::var("OMABRING_SIZE")
         .ok()
@@ -353,8 +369,14 @@ pub(crate) fn window_size() -> (i32, i32, bool) {
     (640, 520, false)
 }
 
-/// Pictures from Bring Fast's cache and image URLs, then every catalog search.
-fn backfill_images(core: &App, source: &std::path::Path, receipts_dir: Option<&std::path::Path>) {
+/// Pictures from Bring Fast's cache and image URLs, then a catalog search.
+/// `limit` caps how many names ask the stores. `None` walks every name still missing.
+pub(crate) fn backfill_images(
+    core: &App,
+    source: &std::path::Path,
+    receipts_dir: Option<&std::path::Path>,
+    limit: Option<usize>,
+) {
     let missing = match core.products_missing_images() {
         Ok(rows) => rows,
         Err(err) => {
@@ -414,9 +436,34 @@ fn backfill_images(core: &App, source: &std::path::Path, receipts_dir: Option<&s
         eprintln!("saved {saved} product images from cache");
         return;
     }
-    eprintln!("searching stores for {} product images", pending.len());
+    let capped = limit
+        .map(|limit| pending.len().min(limit))
+        .unwrap_or(pending.len());
+    if capped == 0 {
+        return;
+    }
+    if capped < pending.len() {
+        eprintln!(
+            "searching stores for {capped} of {} product images",
+            pending.len()
+        );
+    } else {
+        eprintln!("searching stores for {capped} product images");
+    }
     let backend = Registry::live();
-    for (index, item) in pending.iter().enumerate() {
+    for (index, item) in pending.iter().take(capped).enumerate() {
+        // Read the miss cache, then write this miss, before any store request.
+        match core.begin_image_search(&item.name, &item.product_key) {
+            Ok(true) => {}
+            Ok(false) => continue,
+            Err(err) => {
+                eprintln!(
+                    "could not remember the image search for {}: {err}",
+                    item.name
+                );
+                continue;
+            }
+        }
         let mut found = false;
         if item.store == omabring_core::StoreId::Mcdonalds {
             for query in image_queries(&item.name) {
@@ -448,14 +495,16 @@ fn backfill_images(core: &App, source: &std::path::Path, receipts_dir: Option<&s
                 }
             }
         }
-        if let Err(err) = core.remember_image_search_for(&item.name, &item.product_key, found) {
-            eprintln!(
-                "could not remember the image search for {}: {err}",
-                item.name
-            );
+        if found {
+            if let Err(err) = core.remember_image_search_for(&item.name, &item.product_key, true) {
+                eprintln!(
+                    "could not remember the image search for {}: {err}",
+                    item.name
+                );
+            }
         }
         if (index + 1) % 25 == 0 {
-            eprintln!("images {}/{} saved {saved}", index + 1, pending.len());
+            eprintln!("images {}/{} saved {saved}", index + 1, capped);
         }
     }
     eprintln!("saved {saved} product images");
@@ -587,7 +636,9 @@ fn print_view(name: &str) -> glib::ExitCode {
 
 #[cfg(test)]
 mod cli_tests {
-    use super::{canonical_view, flag_value, image_queries, image_stores, parse_size};
+    use super::{
+        canonical_view, flag_value, image_queries, image_stores, parse_size, wants_image_search,
+    };
     use omabring_core::StoreId;
 
     #[test]
@@ -664,5 +715,29 @@ mod cli_tests {
         let queries = image_queries("Coca Cola Zero 330ML PET");
         assert_eq!(queries[0], "Coca Cola Zero 330ML PET");
         assert_eq!(queries[1], "Coca Cola Zero");
+    }
+
+    #[test]
+    fn import_does_not_search_for_images_unless_asked() {
+        let args = vec!["omabring".into(), "--import-bringfast".into(), "db".into()];
+        assert!(!wants_image_search(&args, None));
+        assert!(!wants_image_search(&args, Some("0")));
+        assert!(wants_image_search(&args, Some("1")));
+        let asked = vec![
+            "omabring".into(),
+            "--import-bringfast".into(),
+            "db".into(),
+            "--fetch-images".into(),
+        ];
+        assert!(wants_image_search(&asked, None));
+        assert!(!wants_image_search(&asked, Some("0")));
+        let off = vec![
+            "omabring".into(),
+            "--import-bringfast".into(),
+            "db".into(),
+            "--no-fetch-images".into(),
+        ];
+        assert!(!wants_image_search(&off, None));
+        assert!(!wants_image_search(&off, Some("1")));
     }
 }
