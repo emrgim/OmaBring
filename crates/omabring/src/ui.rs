@@ -1272,6 +1272,9 @@ fn spend_bars(shell: &Rc<RefCell<Shell>>, buckets: &[SpendBucket]) -> gtk::Widge
     for bucket in buckets {
         let track = bar_fill(bucket.amount, max, &layout);
         let button = gtk::Button::new();
+        button.set_has_frame(false);
+        button.set_overflow(gtk::Overflow::Hidden);
+        button.set_valign(gtk::Align::Fill);
         button.set_child(Some(&track));
         button.add_css_class("bf-bar");
         button.set_hexpand(!layout.centre);
@@ -1317,27 +1320,38 @@ fn spend_bars(shell: &Rc<RefCell<Shell>>, buckets: &[SpendBucket]) -> gtk::Widge
 fn bar_fill(amount: f64, max: f64, layout: &BarLayout) -> gtk::Box {
     let track = gtk::Box::new(gtk::Orientation::Vertical, 0);
     track.set_hexpand(!layout.centre);
+    track.set_vexpand(true);
+    track.set_valign(gtk::Align::Fill);
+    track.set_overflow(gtk::Overflow::Hidden);
+    let track_h = layout.height.round().max(8.0) as i32;
     if layout.width > 0 {
-        track.set_size_request(layout.width, layout.height as i32);
+        track.set_size_request(layout.width, track_h);
     } else {
-        track.set_size_request(-1, layout.height as i32);
+        track.set_size_request(-1, track_h);
     }
-    let spacer = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    spacer.set_vexpand(false);
+    // The tallest bar stops short of the top of the track. margin_top places
+    // every bar on the same bottom edge, so a button that clips its top
+    // eats the gap and not the bar.
+    let headroom = (layout.height * 0.16).clamp(6.0, 14.0).round() as i32;
+    let slot = (track_h - headroom).max(4);
     let fill = gtk::Box::new(gtk::Orientation::Vertical, 0);
     fill.add_css_class("bf-bar-fill");
     fill.set_hexpand(true);
-    let height = if max <= 0.0 {
+    fill.set_halign(gtk::Align::Fill);
+    fill.set_valign(gtk::Align::Start);
+    fill.set_vexpand(false);
+    let height = if max <= 0.0 || amount <= 0.0 {
         0
     } else {
-        ((amount / max) * layout.height)
+        ((amount / max) * slot as f64)
             .round()
-            .clamp(0.0, layout.height) as i32
+            .clamp(0.0, slot as f64) as i32
     };
     if height > 0 {
-        fill.set_height_request(height.max(8).min(layout.height as i32));
+        let height = height.max(4).min(slot);
+        fill.set_height_request(height);
+        fill.set_margin_top((track_h - height).max(0));
     }
-    track.append(&spacer);
     track.append(&fill);
     track
 }
@@ -2728,9 +2742,88 @@ fn settings_page(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
     card.append(&shell.borrow().service_label);
     card.append(&note);
     page.append(&card);
+    page.append(&receipts_card(shell));
     page.append(&backup_card(shell));
     page.append(&agent_card(shell));
     page
+}
+
+fn receipts_card(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
+    let card = gtk::Box::new(gtk::Orientation::Vertical, 3);
+    card.add_css_class("bf-card");
+    let title = gtk::Label::new(Some("RECEIPTS"));
+    title.add_css_class("bf-h1-sm");
+    title.set_xalign(0.0);
+    let hint = gtk::Label::new(Some(
+        "Bring Fast stores each scan as retailer/invoice.pdf or .html under ~/.bring-fast/receipts. Link that folder to attach the files to invoices already on this machine.",
+    ));
+    hint.add_css_class("bf-muted");
+    wrap_label(&hint);
+    let saved = shell
+        .borrow()
+        .core
+        .setting("receipts_dir")
+        .ok()
+        .flatten()
+        .filter(|value| !value.trim().is_empty());
+    let entry = gtk::Entry::new();
+    entry.set_text(&saved.unwrap_or_else(|| {
+        home_dir()
+            .join(".bring-fast/receipts")
+            .to_string_lossy()
+            .into_owned()
+    }));
+    let button = gtk::Button::with_label("LINK RECEIPTS FROM FOLDER…");
+    let shell_click = shell.clone();
+    let entry_click = entry.clone();
+    button.connect_clicked(move |_| {
+        let typed = entry_click.text().trim().to_string();
+        let path = std::path::PathBuf::from(&typed);
+        if path.is_dir() {
+            finish_receipt_link(&shell_click, &path);
+            return;
+        }
+        let dialog = gtk::FileDialog::new();
+        dialog.set_title("Link receipts from folder");
+        dialog.set_modal(true);
+        let start = if path.parent().is_some_and(|parent| parent.is_dir()) {
+            path.parent().unwrap().to_path_buf()
+        } else {
+            home_dir().join(".bring-fast")
+        };
+        if start.is_dir() {
+            dialog.set_initial_folder(Some(&gtk::gio::File::for_path(&start)));
+        }
+        let shell_pick = shell_click.clone();
+        let entry_pick = entry_click.clone();
+        let window = shell_click.borrow().window.clone();
+        dialog.select_folder(Some(&window), None::<&Cancellable>, move |result| {
+            let Ok(file) = result else {
+                return;
+            };
+            let Some(folder) = file.path() else {
+                return;
+            };
+            entry_pick.set_text(&folder.to_string_lossy());
+            finish_receipt_link(&shell_pick, &folder);
+        });
+    });
+    card.append(&title);
+    card.append(&hint);
+    card.append(&entry);
+    card.append(&button);
+    card
+}
+
+fn finish_receipt_link(shell: &Rc<RefCell<Shell>>, folder: &std::path::Path) {
+    let core = shell.borrow().core.clone();
+    let toast = shell.borrow().toast.clone();
+    match core.link_receipt_folder(folder) {
+        Ok(0) => toast.add_toast(adw::Toast::new("No new receipt files matched")),
+        Ok(n) => toast.add_toast(adw::Toast::new(&format!("Linked {n} receipts"))),
+        Err(err) => toast.add_toast(adw::Toast::new(&err.to_string())),
+    }
+    schedule(shell);
 }
 
 fn backup_card(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
@@ -2967,6 +3060,12 @@ fn receipt_page(shell: &Rc<RefCell<Shell>>, id: i64) -> gtk::Box {
         .receipt_attachment(invoice.id)
         .ok()
         .flatten();
+    if let Some(path) = attachment.as_ref() {
+        if let Some(text) = omabring_core::receipt_html_text(path) {
+            page.append(&receipt_html_view(&text));
+            return page;
+        }
+    }
     let pages = attachment
         .as_ref()
         .map(|path| omabring_core::receipt_page_images(path))
@@ -3005,6 +3104,22 @@ fn receipt_page(shell: &Rc<RefCell<Shell>>, id: i64) -> gtk::Box {
     note.set_xalign(0.0);
     page.append(&note);
     page
+}
+
+fn receipt_html_view(text: &str) -> gtk::Box {
+    // The same document Bring Fast returns for an `.html` receipt. GTK draws
+    // the visible text; the file itself stays the attachment.
+    let slip = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    slip.add_css_class("bf-card");
+    let body = gtk::Label::new(Some(text));
+    body.set_wrap(true);
+    body.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+    body.set_selectable(true);
+    body.set_xalign(0.0);
+    body.set_yalign(0.0);
+    body.set_hexpand(true);
+    slip.append(&body);
+    slip
 }
 
 fn receipt_slip(invoice: &InvoiceSummary) -> gtk::Box {

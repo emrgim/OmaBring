@@ -8,7 +8,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::Value;
@@ -377,32 +377,10 @@ fn bind_imported_receipt(
     store: &str,
     invoice_no: &str,
     order_no: &str,
-    source_file: &str,
+    _source_file: &str,
 ) -> Result<()> {
-    let mut candidates = Vec::new();
-    let stored = source_file.trim();
-    if !stored.is_empty() {
-        candidates.push(PathBuf::from(stored));
-        if let Some(parent) = source_db.parent() {
-            candidates.push(parent.join(stored));
-            candidates.push(parent.join("receipts").join(stored));
-        }
-        if let Some(dir) = receipts_dir {
-            candidates.push(dir.join(stored));
-        }
-    }
-    let folded: String = store
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric())
-        .flat_map(|c| c.to_lowercase())
-        .collect();
-    let mut names = vec![invoice_no.to_string()];
-    if !order_no.trim().is_empty() {
-        names.push(order_no.trim().to_string());
-        names.push(format!("order-{}", order_no.trim()));
-    }
-    let folders = [store.to_string(), folded];
-    let exts = ["pdf", "html", "htm", "png", "jpg", "jpeg", "webp", "gif"];
+    // Bring Fast's source_file column is the Gmail attachment name. The file
+    // on disk is receipts/<slug>/<safe invoice>.pdf or .html.
     let mut roots = Vec::new();
     if let Some(dir) = receipts_dir {
         roots.push(dir.to_path_buf());
@@ -410,16 +388,10 @@ fn bind_imported_receipt(
     if let Some(parent) = source_db.parent() {
         roots.push(parent.join("receipts"));
     }
-    for root in roots {
-        for folder in &folders {
-            for name in &names {
-                for ext in exts {
-                    candidates.push(root.join(folder).join(format!("{name}.{ext}")));
-                }
-            }
-        }
+    if let Some(path) = crate::receipts::find_bringfast_receipt(&roots, store, invoice_no, order_no)
+    {
+        crate::receipts::bind_receipt_file(dest, invoice_id, &[path])?;
     }
-    crate::receipts::bind_receipt_file(dest, invoice_id, &candidates)?;
     Ok(())
 }
 
