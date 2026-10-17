@@ -50,6 +50,9 @@ impl App {
         conn.execute_batch(SCHEMA)?;
         migrate_single_owner(&conn)?;
         household::ensure_household(&conn)?;
+        // Existing databases imported before receipt files were kept have an
+        // empty source_file. Fill it from Bring Fast's receipts folder.
+        let _ = receipts::attach_missing_receipts(&conn, &data_dir);
         let _ = fs::remove_file(data_dir.join("session.json"));
         set_mode(&db_path, 0o600);
         Ok(Self {
@@ -262,6 +265,10 @@ CREATE TABLE IF NOT EXISTS product_aliases (
 CREATE TABLE IF NOT EXISTS app_settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS receipt_file_seen (
+    path TEXT PRIMARY KEY
 );
 "#;
 

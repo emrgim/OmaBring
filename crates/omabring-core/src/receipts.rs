@@ -299,10 +299,498 @@ fn archive_receipt_file(dest: &Connection, invoice_id: i64, source: &Path) -> Re
         .file_name()
         .ok_or_else(|| Error::Message("receipt file has no name".into()))?;
     let dest_path = root.join(name);
-    if source != dest_path {
-        fs::copy(source, &dest_path).map_err(|err| Error::Message(err.to_string()))?;
+    if source != dest_path && !same_file(source, &dest_path) {
+        if fs::hard_link(source, &dest_path).is_err() {
+            fs::copy(source, &dest_path).map_err(|err| Error::Message(err.to_string()))?;
+        }
     }
     Ok(dest_path)
+}
+
+fn same_file(left: &Path, right: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    let Ok(left) = fs::metadata(left) else {
+        return false;
+    };
+    let Ok(right) = fs::metadata(right) else {
+        return false;
+    };
+    left.dev() == right.dev() && left.ino() == right.ino()
+}
+
+/// Bring Fast keeps the scan at `receipts/<store>/<invoice>.pdf` (`purchases.py`
+/// `receipt_dir` / `receipt_path`) and stores that path on `invoices.source_file`.
+/// An upgrade copies or links the file into this app's data directory and
+/// fills `source_file` for invoices that were imported without it.
+pub(crate) fn attach_missing_receipts(conn: &Connection, data_dir: &Path) -> Result<usize> {
+    conn.execute_batch("CREATE TABLE IF NOT EXISTS receipt_file_seen (path TEXT PRIMARY KEY)")?;
+    let pending = invoices_missing_file(conn)?;
+    if pending.is_empty() {
+        return Ok(0);
+    }
+    let roots = receipt_roots(conn, data_dir);
+    let databases = bringfast_databases(conn);
+    let mut index: std::collections::HashMap<String, Vec<FileHit>> =
+        std::collections::HashMap::new();
+    for root in &roots {
+        index_receipt_tree(root, 0, &mut index);
+    }
+    for database in &databases {
+        index_bringfast_db(database, &mut index);
+    }
+    let mut linked = 0usize;
+    let mut still = Vec::new();
+    for invoice in &pending {
+        if let Some(path) = best_hit(&index, &invoice.store, &invoice.invoice_no, data_dir) {
+            if remember_receipt_file(conn, invoice.id, &path).is_ok() {
+                linked += 1;
+                continue;
+            }
+        }
+        still.push(invoice.clone());
+    }
+    if still.is_empty() {
+        return Ok(linked);
+    }
+    linked += link_by_reading(conn, &roots)?;
+    Ok(linked)
+}
+
+/// Point one invoice at a file that already exists. The import uses this when
+/// Bring Fast's `source_file` column names the original PDF or image.
+pub(crate) fn bind_receipt_file(
+    dest: &Connection,
+    invoice_id: i64,
+    candidates: &[PathBuf],
+) -> Result<bool> {
+    for path in candidates {
+        if path.is_file() {
+            remember_receipt_file(dest, invoice_id, path)?;
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+pub(crate) fn remember_import_locations(
+    dest: &Connection,
+    source_db: &Path,
+    receipts_dir: Option<&Path>,
+) -> Result<()> {
+    save_setting(dest, "bringfast_source", &source_db.display().to_string())?;
+    if let Some(dir) = receipts_dir {
+        save_setting(dest, "receipts_dir", &dir.display().to_string())?;
+    }
+    Ok(())
+}
+
+#[derive(Clone)]
+struct PendingInvoice {
+    id: i64,
+    store: String,
+    invoice_no: String,
+}
+
+struct FileHit {
+    path: PathBuf,
+    store: String,
+}
+
+fn invoices_missing_file(conn: &Connection) -> Result<Vec<PendingInvoice>> {
+    if !crate::table_exists(conn, "invoices")? {
+        return Ok(Vec::new());
+    }
+    let mut stmt = conn.prepare(
+        "SELECT id, store, invoice_no, ifnull(source_file, '') FROM invoices ORDER BY id",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+        ))
+    })?;
+    let mut pending = Vec::new();
+    for row in rows {
+        let (id, store, invoice_no, stored) = row?;
+        let stored = stored.trim();
+        if !stored.is_empty() && Path::new(stored).is_file() {
+            continue;
+        }
+        pending.push(PendingInvoice {
+            id,
+            store,
+            invoice_no,
+        });
+    }
+    Ok(pending)
+}
+
+fn invoice_needs_file(conn: &Connection, invoice_id: i64) -> Result<bool> {
+    let stored: String = conn.query_row(
+        "SELECT ifnull(source_file, '') FROM invoices WHERE id = ?1",
+        params![invoice_id],
+        |row| row.get(0),
+    )?;
+    Ok(stored.trim().is_empty() || !Path::new(stored.trim()).is_file())
+}
+
+fn save_setting(conn: &Connection, key: &str, value: &str) -> Result<()> {
+    conn.execute(
+        "INSERT INTO app_settings (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![key, value],
+    )?;
+    Ok(())
+}
+
+fn load_setting(conn: &Connection, key: &str) -> Option<String> {
+    conn.query_row(
+        "SELECT value FROM app_settings WHERE key = ?1",
+        params![key],
+        |row| row.get(0),
+    )
+    .ok()
+}
+
+fn receipt_roots(conn: &Connection, data_dir: &Path) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    let mut push = |path: PathBuf| {
+        if path.is_dir() && !roots.iter().any(|have| have == &path) {
+            roots.push(path);
+        }
+    };
+    push(data_dir.join("receipts"));
+    if let Some(dir) = load_setting(conn, "receipts_dir") {
+        push(PathBuf::from(dir));
+    }
+    if let Ok(data) = std::env::var("BRINGFAST_DATA") {
+        let data = data.trim();
+        if !data.is_empty() {
+            push(PathBuf::from(data).join("receipts"));
+        }
+    }
+    if let Some(source) = load_setting(conn, "bringfast_source") {
+        if let Some(parent) = Path::new(&source).parent() {
+            push(parent.join("receipts"));
+        }
+    }
+    push(crate::home_dir().join(".bring-fast/receipts"));
+    roots
+}
+
+fn bringfast_databases(conn: &Connection) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let mut push = |path: PathBuf| {
+        if path.is_file() && !found.iter().any(|have| have == &path) {
+            found.push(path);
+        }
+    };
+    if let Some(source) = load_setting(conn, "bringfast_source") {
+        push(PathBuf::from(source));
+    }
+    if let Ok(data) = std::env::var("BRINGFAST_DATA") {
+        let data = data.trim();
+        if !data.is_empty() {
+            push(PathBuf::from(data).join("bringfast.db"));
+        }
+    }
+    push(crate::home_dir().join(".bring-fast/bringfast.db"));
+    found
+}
+
+fn index_receipt_tree(
+    dir: &Path,
+    depth: usize,
+    index: &mut std::collections::HashMap<String, Vec<FileHit>>,
+) {
+    if depth > 3 || !dir.is_dir() {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with('.') || name == "_preview" {
+            continue;
+        }
+        let path = entry.path();
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
+        if kind.is_dir() {
+            index_receipt_tree(&path, depth + 1, index);
+            continue;
+        }
+        if !kind.is_file() || !is_receipt_ext(&path) {
+            continue;
+        }
+        let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+            continue;
+        };
+        let store = path
+            .parent()
+            .and_then(|parent| parent.file_name())
+            .and_then(|name| name.to_str())
+            .filter(|_| depth > 0)
+            .map(canonical_store)
+            .unwrap_or_default();
+        add_hit(index, &store, stem, &path);
+    }
+}
+
+fn index_bringfast_db(path: &Path, index: &mut std::collections::HashMap<String, Vec<FileHit>>) {
+    let Ok(source) = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+    else {
+        return;
+    };
+    if !crate::table_exists(&source, "invoices").unwrap_or(false) {
+        return;
+    }
+    let has_file = crate::column_exists(&source, "invoices", "source_file").unwrap_or(false);
+    let has_order = crate::column_exists(&source, "invoices", "order_no").unwrap_or(false);
+    let sql = format!(
+        "SELECT retailer, invoice_no, {order}, {file} FROM invoices",
+        order = if has_order {
+            "ifnull(order_no, '')"
+        } else {
+            "''"
+        },
+        file = if has_file {
+            "ifnull(source_file, '')"
+        } else {
+            "''"
+        },
+    );
+    let Ok(mut stmt) = source.prepare(&sql) else {
+        return;
+    };
+    let Ok(rows) = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+        ))
+    }) else {
+        return;
+    };
+    let parent = path.parent().unwrap_or(path);
+    for row in rows.flatten() {
+        let (retailer, invoice_no, order_no, source_file) = row;
+        let store = canonical_store(&retailer);
+        if let Some(file) = resolve_stored_file(parent, &source_file) {
+            add_hit(index, &store, &invoice_no, &file);
+            add_hit(index, &store, &order_no, &file);
+        }
+        if let Some(found) = best_hit(index, &store, &invoice_no, Path::new("")) {
+            add_hit(index, &store, &order_no, &found);
+        } else if let Some(found) = best_hit(index, &store, &order_no, Path::new("")) {
+            add_hit(index, &store, &invoice_no, &found);
+        }
+    }
+}
+
+fn resolve_stored_file(base: &Path, stored: &str) -> Option<PathBuf> {
+    let stored = stored.trim();
+    if stored.is_empty() {
+        return None;
+    }
+    let direct = PathBuf::from(stored);
+    if direct.is_file() {
+        return Some(direct);
+    }
+    let name = Path::new(stored)
+        .file_name()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(stored));
+    for candidate in [
+        base.join(stored),
+        base.join("receipts").join(stored),
+        base.join("receipts").join(&name),
+    ] {
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+fn link_by_reading(conn: &Connection, roots: &[PathBuf]) -> Result<usize> {
+    let mut linked = 0usize;
+    for root in roots {
+        let mut files = Vec::new();
+        collect_receipts(root, &mut files)?;
+        for path in files {
+            if file_was_seen(conn, &path)? {
+                continue;
+            }
+            if let Some(parsed) = read_receipt(&path) {
+                if let Some(invoice_id) = known_receipt(
+                    conn,
+                    parsed.store,
+                    &parsed.invoice_no,
+                    &parsed.order_no,
+                    &path,
+                )? {
+                    if invoice_needs_file(conn, invoice_id)?
+                        && remember_receipt_file(conn, invoice_id, &path).is_ok()
+                    {
+                        linked += 1;
+                    }
+                }
+            }
+            mark_seen(conn, &path)?;
+        }
+    }
+    Ok(linked)
+}
+
+fn file_was_seen(conn: &Connection, path: &Path) -> Result<bool> {
+    let found: Option<i64> = conn
+        .query_row(
+            "SELECT 1 FROM receipt_file_seen WHERE path = ?1",
+            params![path.display().to_string()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(found.is_some())
+}
+
+fn mark_seen(conn: &Connection, path: &Path) -> Result<()> {
+    conn.execute(
+        "INSERT OR IGNORE INTO receipt_file_seen (path) VALUES (?1)",
+        params![path.display().to_string()],
+    )?;
+    Ok(())
+}
+
+fn add_hit(
+    index: &mut std::collections::HashMap<String, Vec<FileHit>>,
+    store: &str,
+    raw: &str,
+    path: &Path,
+) {
+    if raw.trim().is_empty() || !path.is_file() {
+        return;
+    }
+    for key in receipt_name_keys(raw) {
+        let hits = index.entry(key).or_default();
+        if hits
+            .iter()
+            .any(|hit| hit.path == path && hit.store == store)
+        {
+            continue;
+        }
+        hits.push(FileHit {
+            path: path.to_path_buf(),
+            store: store.to_string(),
+        });
+    }
+}
+
+fn best_hit(
+    index: &std::collections::HashMap<String, Vec<FileHit>>,
+    store: &str,
+    invoice_no: &str,
+    data_dir: &Path,
+) -> Option<PathBuf> {
+    let store = canonical_store(store);
+    let mut found: Vec<&FileHit> = Vec::new();
+    for key in receipt_name_keys(invoice_no) {
+        if let Some(hits) = index.get(&key) {
+            for hit in hits {
+                if hit.store != store && !hit.store.is_empty() {
+                    continue;
+                }
+                if !found.iter().any(|have| have.path == hit.path) {
+                    found.push(hit);
+                }
+            }
+        }
+    }
+    found
+        .into_iter()
+        .min_by_key(|hit| {
+            let owned = data_dir.as_os_str().is_empty() || hit.path.starts_with(data_dir);
+            if owned {
+                0
+            } else {
+                1
+            }
+        })
+        .map(|hit| hit.path.clone())
+}
+
+fn receipt_name_keys(raw: &str) -> Vec<String> {
+    let mut keys = Vec::new();
+    let mut push = |value: &str| {
+        let value = value.trim();
+        if value.is_empty() || keys.iter().any(|have: &String| have == value) {
+            return;
+        }
+        keys.push(value.to_string());
+        let lower = value.to_lowercase();
+        if !keys.iter().any(|have| have == &lower) {
+            keys.push(lower);
+        }
+    };
+    push(raw);
+    if let Some((head, _)) = raw.split_once('#') {
+        push(head);
+    }
+    let safe: String = raw
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+        .collect();
+    push(&safe);
+    let trimmed = raw.trim();
+    if let Some(rest) = trimmed.strip_prefix("order-") {
+        push(rest);
+    } else if !trimmed.is_empty() {
+        push(&format!("order-{trimmed}"));
+    }
+    if let Some(rest) = safe.strip_prefix("order-") {
+        push(rest);
+    }
+    keys
+}
+
+fn canonical_store(raw: &str) -> String {
+    if let Some(id) = StoreId::parse(raw) {
+        return id.as_str().to_string();
+    }
+    let folded: String = raw
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .flat_map(|c| c.to_lowercase())
+        .collect();
+    for id in StoreId::all() {
+        let id_fold: String = id
+            .as_str()
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .collect();
+        if id_fold == folded {
+            return id.as_str().to_string();
+        }
+    }
+    folded
+}
+
+fn is_receipt_ext(path: &Path) -> bool {
+    let ext = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    matches!(
+        ext.as_str(),
+        "pdf" | "html" | "htm" | "png" | "jpg" | "jpeg" | "webp" | "gif"
+    )
 }
 
 /// Where Bring Fast keeps a receipt scan: the stored path, then
@@ -1690,6 +2178,88 @@ mod tests {
     };
     use crate::model::StoreId;
     use std::fs;
+
+    #[test]
+    fn an_upgrade_copies_bringfast_receipts_and_fills_source_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = crate::App::open(dir.path().join("oma")).unwrap();
+        app.with_conn(|conn| {
+            conn.execute(
+                "INSERT INTO invoices (store, invoice_no, purchased_on, currency, total) VALUES ('carrefour', '1001', '2026-03-01', 'AED', 9.5)",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO invoices (store, invoice_no, purchased_on, currency, total) VALUES ('union_coop', 'U-2008', '2026-03-02', 'AED', 4.0)",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO invoices (store, invoice_no, purchased_on, currency, total) VALUES ('grandiose', 'SLIP-9', '2026-03-03', 'AED', 19.0)",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO invoices (store, invoice_no, purchased_on, currency, total) VALUES ('carrefour', '93084417', '2026-08-23', 'AED', 11.98)",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+        let incoming = dir.path().join("incoming");
+        fs::create_dir_all(incoming.join("carrefour")).unwrap();
+        fs::create_dir_all(incoming.join("unioncoop")).unwrap();
+        fs::write(incoming.join("carrefour/1001.pdf"), b"%PDF-1.4 carrefour").unwrap();
+        fs::write(incoming.join("unioncoop/order-U-2008.png"), b"png-bytes").unwrap();
+        let outside = dir.path().join("mail/slip.pdf");
+        fs::create_dir_all(outside.parent().unwrap()).unwrap();
+        fs::write(&outside, b"%PDF-1.4 grandiose").unwrap();
+        fs::write(
+            incoming.join("carrefour/weird-name.html"),
+            "Tax Invoice\nCarrefour\nInvoice No. : 93084417\nInvoice Date : 23-Aug-2026\nCoca-Cola Zero Sugar 2.0 2.0 5.99 5.71 11.41 5.00 0.57 0.00 11.98\n",
+        )
+        .unwrap();
+
+        let source = dir.path().join("bringfast.db");
+        let bf = rusqlite::Connection::open(&source).unwrap();
+        bf.execute_batch(
+            "CREATE TABLE invoices (retailer TEXT, invoice_no TEXT, order_no TEXT, source_file TEXT);",
+        )
+        .unwrap();
+        bf.execute(
+            "INSERT INTO invoices (retailer, invoice_no, order_no, source_file) VALUES ('grandiose', 'SLIP-9', '9', ?1)",
+            rusqlite::params![outside.display().to_string()],
+        )
+        .unwrap();
+        drop(bf);
+
+        let data_dir = app.data_dir().to_path_buf();
+        app.with_conn(|conn| {
+            conn.execute(
+                "INSERT INTO app_settings (key, value) VALUES ('receipts_dir', ?1), ('bringfast_source', ?2)",
+                rusqlite::params![incoming.display().to_string(), source.display().to_string()],
+            )?;
+            let linked = super::attach_missing_receipts(conn, &data_dir)?;
+            assert_eq!(linked, 4);
+            let stored: Vec<(String, String)> = {
+                let mut stmt = conn.prepare(
+                    "SELECT invoice_no, source_file FROM invoices ORDER BY invoice_no",
+                )?;
+                let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+                rows.collect::<Result<Vec<_>, _>>()?
+            };
+            for (invoice_no, path) in &stored {
+                let file = std::path::Path::new(path);
+                assert!(file.is_file(), "{invoice_no} -> {path}");
+                assert!(
+                    path.contains("/receipts/"),
+                    "{invoice_no} was not copied into the data dir: {path}"
+                );
+            }
+            let again = super::attach_missing_receipts(conn, &data_dir)?;
+            assert_eq!(again, 0);
+            Ok(())
+        })
+        .unwrap();
+    }
 
     #[test]
     fn a_receipt_file_is_found_under_the_store_and_the_order_name() {

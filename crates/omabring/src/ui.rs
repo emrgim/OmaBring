@@ -907,108 +907,71 @@ fn purchases(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
 }
 
 /// The spend chart. It stays above the scroller on Dashboard and Purchases.
+/// One line of title, grain, and the period average, then a short bar row.
 fn spend_chart(shell: &Rc<RefCell<Shell>>, purchases: bool) -> gtk::Box {
-    let dash = gtk::Box::new(gtk::Orientation::Vertical, 3);
+    let dash = gtk::Box::new(gtk::Orientation::Vertical, 1);
     dash.add_css_class("bf-card");
     dash.add_css_class("bf-dash");
-    let narrow = frame_width() < 1000;
-    let top = gtk::Box::new(
-        if narrow {
-            gtk::Orientation::Vertical
-        } else {
-            gtk::Orientation::Horizontal
-        },
-        6,
-    );
-    let titles = gtk::Box::new(gtk::Orientation::Vertical, 2);
-    titles.set_hexpand(true);
-    titles.set_halign(gtk::Align::Start);
+    dash.set_vexpand(false);
+    let top = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     if purchases {
         let h1 = heading("PURCHASES");
         h1.add_css_class("bf-h1-sm");
-        titles.append(&h1);
+        top.append(&h1);
     } else {
-        titles.append(&heading_mark("YOUR ", "SPEND"));
+        top.append(&heading_mark("YOUR ", "SPEND"));
     }
-    top.append(&titles);
     top.append(&grain_row(shell));
-    dash.append(&top);
-
     let view = load_view(shell);
     if shell.borrow().bar_focus.is_some() {
         dash.add_css_class("is-focus");
     }
-    if purchases {
-        let kpis = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        kpis.set_hexpand(true);
-        kpis.append(&kpi(&format!("AED {:.0}", view.total), "SPENT"));
-        kpis.append(&kpi(
-            &view.buckets.len().to_string(),
-            &period_unit(shell.borrow().grain, view.buckets.len()),
-        ));
-        kpis.append(&kpi(&view.receipts.to_string(), "RECEIPTS"));
-        dash.append(&kpis);
-    }
-
-    let avg = gtk::Box::new(gtk::Orientation::Vertical, 2);
-    let who = gtk::Label::new(Some(&format!(
-        "{} AVERAGE THIS PERIOD",
-        grain_word(shell.borrow().grain)
-    )));
-    who.add_css_class("bf-kicker");
-    who.set_xalign(0.0);
-    let delta = gtk::Label::new(Some(&format!("AED {:.2}", view.average)));
-    delta.add_css_class("bf-delta");
-    delta.set_xalign(0.0);
-    let fine = gtk::Label::new(Some(&format!(
-        "AED {:.2}  ÷  {} {}   ·   {}  →  {}",
+    let unit = period_unit(shell.borrow().grain, view.buckets.len());
+    let summary = gtk::Label::new(Some(&format!(
+        "AED {:.0}  ·  {:.0}/{}  ·  {} receipts  ·  {}→{}",
         view.total,
-        view.buckets.len(),
-        period_unit(shell.borrow().grain, view.buckets.len()),
-        view.start,
-        view.end
+        view.average,
+        unit.to_lowercase(),
+        view.receipts,
+        view.start.format("%m-%d"),
+        view.end.format("%m-%d")
     )));
-    fine.add_css_class("bf-muted");
-    fine.set_wrap(true);
-    fine.set_max_width_chars(36);
-    fine.set_xalign(0.0);
-    avg.append(&who);
-    avg.append(&delta);
-    avg.append(&fine);
-    dash.append(&avg);
+    summary.add_css_class("bf-muted");
+    summary.set_xalign(1.0);
+    summary.set_hexpand(true);
+    summary.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    summary.set_max_width_chars(28);
+    top.append(&summary);
+    dash.append(&top);
     dash.append(&spend_bars(shell, &view.buckets));
     dash
 }
 
 fn purchase_cards(shell: &Rc<RefCell<Shell>>, products: &[Prod]) -> gtk::Box {
-    let page = gtk::Box::new(gtk::Orientation::Vertical, 6);
-    let sorts = gtk::FlowBox::new();
-    sorts.set_selection_mode(gtk::SelectionMode::None);
-    sorts.set_column_spacing(4);
-    sorts.set_row_spacing(2);
-    let per_line = if frame_width() < 800 {
-        3
-    } else if frame_width() < 1100 {
-        4
-    } else {
-        7
-    };
-    sorts.set_min_children_per_line(2);
-    sorts.set_max_children_per_line(per_line);
-    sorts.set_homogeneous(false);
+    let page = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    let sorts = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+    sorts.add_css_class("bf-thead");
     sorts.set_hexpand(true);
+    let compact = frame_width() < 800;
     for (text, key) in [
-        ("Product", SortKey::Name),
+        (if compact { "Item" } else { "Product" }, SortKey::Name),
         ("Last", SortKey::Last),
         ("Times", SortKey::Times),
-        ("Units", SortKey::Qty),
-        ("Frequency", SortKey::Frequency),
+        (if compact { "Qty" } else { "Units" }, SortKey::Qty),
+        (
+            if compact { "Freq" } else { "Frequency" },
+            SortKey::Frequency,
+        ),
         ("Likely", SortKey::Likely),
         ("Spent", SortKey::Spent),
     ] {
-        sorts.insert(&sort_header(shell, text, key, 0, false), -1);
+        let header = sort_header(shell, text, key, 0, false);
+        header.set_hexpand(true);
+        sorts.append(&header);
     }
-    sorts.insert(&shortage_header(shell), -1);
+    let shortage = shortage_header(shell);
+    shortage.set_hexpand(true);
+    sorts.append(&shortage);
     page.append(&sorts);
     if products.is_empty() {
         let empty = gtk::Label::new(Some(if shell.borrow().shortage {
@@ -1112,23 +1075,7 @@ fn grain_row(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
 }
 
 fn range_row(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
-    let narrow = frame_width() < 1100;
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-    let flow = gtk::FlowBox::new();
-    flow.set_selection_mode(gtk::SelectionMode::None);
-    flow.set_column_spacing(4);
-    flow.set_row_spacing(2);
-    flow.set_homogeneous(false);
-    flow.set_hexpand(true);
-    let per_line = if frame_width() < 800 {
-        4
-    } else if narrow {
-        6
-    } else {
-        8
-    };
-    flow.set_min_children_per_line(per_line.min(4));
-    flow.set_max_children_per_line(per_line);
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 2);
     let custom = shell.borrow().custom;
     let days = shell.borrow().range_days;
     for (len, label) in [
@@ -1152,9 +1099,8 @@ fn range_row(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
             drop(shell);
             schedule(&shell_click);
         });
-        flow.insert(&button, -1);
+        row.append(&button);
     }
-    row.append(&flow);
     row
 }
 
@@ -1162,11 +1108,13 @@ fn date_row(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
     let start = gtk::Entry::new();
     start.set_placeholder_text(Some("Start"));
-    start.set_width_chars(8);
+    start.set_width_chars(6);
+    start.set_max_width_chars(8);
     start.set_text(&shell.borrow().custom_start);
     let end = gtk::Entry::new();
     end.set_placeholder_text(Some("End"));
-    end.set_width_chars(8);
+    end.set_width_chars(6);
+    end.set_max_width_chars(8);
     end.set_text(&shell.borrow().custom_end);
     let apply = gtk::Button::with_label("APPLY");
     apply.add_css_class("bf-ghost");
@@ -1201,15 +1149,18 @@ fn frame_width() -> i32 {
 
 fn bar_layout(count: usize) -> BarLayout {
     let (window_w, window_h, _) = crate::window_size();
-    let mut height: f64 = if count <= 6 { 48.0 } else { 36.0 };
-    if window_h < 460 {
-        height *= 0.55;
-    } else if window_h < 640 {
-        height *= 0.75;
-    } else if window_h >= 760 {
-        height *= 1.15;
-    }
-    height = height.max(20.0);
+    // The sticky chart, labels included, stays near 120–140px on a short window.
+    let height: f64 = if window_h <= 420 {
+        44.0
+    } else if window_h <= 560 {
+        64.0
+    } else if window_h < 760 {
+        80.0
+    } else if count <= 6 {
+        96.0
+    } else {
+        72.0
+    };
     // A handful of bars keep a modest width and sit in the centre.
     // More than that share the card, with no per-bar minimum.
     let width = if count > 0 && count <= 6 {
@@ -1372,7 +1323,7 @@ fn bar_fill(amount: f64, max: f64, layout: &BarLayout) -> gtk::Box {
         track.set_size_request(-1, layout.height as i32);
     }
     let spacer = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    spacer.set_vexpand(true);
+    spacer.set_vexpand(false);
     let fill = gtk::Box::new(gtk::Orientation::Vertical, 0);
     fill.add_css_class("bf-bar-fill");
     fill.set_hexpand(true);
@@ -1392,7 +1343,7 @@ fn bar_fill(amount: f64, max: f64, layout: &BarLayout) -> gtk::Box {
 }
 
 fn trend_card(products: &[Prod]) -> gtk::Box {
-    let card = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    let card = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     card.add_css_class("bf-card");
     let kicker = gtk::Label::new(Some("PRICE TREND"));
     kicker.add_css_class("bf-kicker");
@@ -1405,7 +1356,9 @@ fn trend_card(products: &[Prod]) -> gtk::Box {
         .collect();
     if changes.is_empty() {
         let line = gtk::Label::new(Some("Need two buys on a product"));
+        line.add_css_class("bf-muted");
         line.set_xalign(0.0);
+        line.set_hexpand(true);
         card.append(&line);
         return card;
     }
@@ -1417,11 +1370,11 @@ fn trend_card(products: &[Prod]) -> gtk::Box {
     let down = changes.iter().filter(|n| **n < -1.0).count();
     let flat = changes.len() - up - down;
     let word = if avg > 1.0 {
-        "Prices are rising"
+        "rising"
     } else if avg < -1.0 {
-        "Prices are falling"
+        "falling"
     } else {
-        "Prices are stable"
+        "stable"
     };
     let arrow = if avg > 1.0 {
         "↑"
@@ -1430,16 +1383,15 @@ fn trend_card(products: &[Prod]) -> gtk::Box {
     } else {
         "→"
     };
-    let delta = gtk::Label::new(Some(&format!("{arrow} {avg:+.1}%")));
-    delta.add_css_class("bf-delta");
-    delta.set_xalign(0.0);
     let detail = gtk::Label::new(Some(&format!(
-        "{word}\n{} products · typical {median:+.1}% · {up} up · {down} down · {flat} flat",
+        "{arrow} {avg:+.1}%  {word}  ·  {} products  ·  typical {median:+.1}%  ·  {up} up  ·  {down} down  ·  {flat} flat",
         changes.len()
     )));
+    detail.add_css_class("bf-muted");
     detail.set_xalign(0.0);
-    wrap_label(&detail);
-    card.append(&delta);
+    detail.set_hexpand(true);
+    detail.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    detail.set_max_width_chars(42);
     card.append(&detail);
     card
 }
@@ -2047,11 +1999,13 @@ fn product_page(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
         }
         stats.insert(&likely_kpi(shell, &name, item.likely), -1);
     }
+    if let Some(item) = &history {
+        page.append(&purchase_list(shell, item));
+    }
     page.append(&stats);
     if let Some(item) = &history {
         page.append(&product_chart(shell, item));
         page.append(&store_prices(item));
-        page.append(&purchase_list(shell, item));
     }
 
     let card = gtk::Box::new(gtk::Orientation::Vertical, 6);
@@ -2339,6 +2293,10 @@ fn purchase_list(shell: &Rc<RefCell<Shell>>, item: &omabring_core::ProductHistor
     // the receipt number, and the price. The number opens that receipt.
     let card = gtk::Box::new(gtk::Orientation::Vertical, 0);
     card.add_css_class("bf-card");
+    let kicker = gtk::Label::new(Some("RECEIPTS"));
+    kicker.add_css_class("bf-kicker");
+    kicker.set_xalign(0.0);
+    card.append(&kicker);
     let product = item.name.clone();
     for point in item.points.iter().rev() {
         let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -2571,8 +2529,10 @@ fn paint_filters(shell: &Rc<RefCell<Shell>>) {
     if !show {
         return;
     }
-    bar.append(&range_row(shell));
-    bar.append(&date_row(shell));
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+    row.append(&range_row(shell));
+    row.append(&date_row(shell));
+    bar.append(&row);
 }
 
 fn agent_button() -> gtk::Button {
@@ -3608,6 +3568,8 @@ fn sort_header(
     drop(state);
     let label = gtk::Label::new(Some(&caption));
     label.set_xalign(if end { 1.0 } else { 0.0 });
+    label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    label.set_max_width_chars(12);
     let button = gtk::Button::new();
     button.set_child(Some(&label));
     button.add_css_class("bf-th");
@@ -3702,15 +3664,6 @@ fn qty_text(qty: f64) -> String {
         format!("{}", qty.round() as i64)
     } else {
         format!("{qty:.1}")
-    }
-}
-
-fn grain_word(grain: Grain) -> &'static str {
-    match grain {
-        Grain::Daily => "DAILY",
-        Grain::Weekly => "WEEKLY",
-        Grain::Monthly => "MONTHLY",
-        Grain::Yearly => "YEARLY",
     }
 }
 

@@ -8,7 +8,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::Value;
@@ -152,6 +152,7 @@ impl App {
                 &source,
                 dest,
                 self,
+                path,
                 options.dry_run,
                 receipts.as_deref(),
                 &mut report,
@@ -179,6 +180,10 @@ impl App {
                     key.as_deref(),
                     &mut report,
                 )?;
+            }
+            if !options.dry_run {
+                crate::receipts::remember_import_locations(dest, path, receipts.as_deref())?;
+                let _ = crate::receipts::attach_missing_receipts(dest, self.data_dir());
             }
             Ok(())
         })?;
@@ -248,6 +253,7 @@ fn import_invoices(
     source: &Connection,
     dest: &Connection,
     app: &App,
+    source_db: &Path,
     dry_run: bool,
     receipts_dir: Option<&Path>,
     report: &mut ImportReport,
@@ -255,10 +261,23 @@ fn import_invoices(
     if !table_exists(source, "invoices") {
         return Ok(());
     }
+    let has_file = crate::column_exists(source, "invoices", "source_file").unwrap_or(false);
+    let has_order = crate::column_exists(source, "invoices", "order_no").unwrap_or(false);
+    let sql = format!(
+        "SELECT id, user_id, retailer, invoice_no, invoice_date, {order}, {file} FROM invoices ORDER BY user_id, id",
+        order = if has_order {
+            "ifnull(order_no, '')"
+        } else {
+            "''"
+        },
+        file = if has_file {
+            "ifnull(source_file, '')"
+        } else {
+            "''"
+        },
+    );
     let mut claimed: HashSet<(String, String)> = HashSet::new();
-    let mut stmt = source.prepare(
-        "SELECT id, user_id, retailer, invoice_no, invoice_date FROM invoices ORDER BY user_id, id",
-    )?;
+    let mut stmt = source.prepare(&sql)?;
     let rows = stmt.query_map([], |row| {
         Ok((
             row.get::<_, i64>(0)?,
@@ -266,10 +285,12 @@ fn import_invoices(
             row.get::<_, String>(2)?,
             row.get::<_, String>(3)?,
             row.get::<_, Option<String>>(4)?,
+            row.get::<_, String>(5)?,
+            row.get::<_, String>(6)?,
         ))
     })?;
     for row in rows {
-        let (id, user_id, retailer, invoice_no, invoice_date) = row?;
+        let (id, user_id, retailer, invoice_no, invoice_date, order_no, source_file) = row?;
         let Some(store) = StoreId::parse(&retailer) else {
             push_skipped(&mut report.skipped_stores, &retailer);
             continue;
@@ -307,6 +328,16 @@ fn import_invoices(
                     params![invoice_id],
                 )?;
                 write_lines(dest, app, invoice_id, &lines, receipts_dir, dry_run, report)?;
+                bind_imported_receipt(
+                    dest,
+                    invoice_id,
+                    source_db,
+                    receipts_dir,
+                    store.as_str(),
+                    &key.1,
+                    &order_no,
+                    &source_file,
+                )?;
             }
             continue;
         }
@@ -324,7 +355,71 @@ fn import_invoices(
         )?;
         let invoice_id = dest.last_insert_rowid();
         write_lines(dest, app, invoice_id, &lines, receipts_dir, false, report)?;
+        bind_imported_receipt(
+            dest,
+            invoice_id,
+            source_db,
+            receipts_dir,
+            store.as_str(),
+            &key.1,
+            &order_no,
+            &source_file,
+        )?;
     }
+    Ok(())
+}
+
+fn bind_imported_receipt(
+    dest: &Connection,
+    invoice_id: i64,
+    source_db: &Path,
+    receipts_dir: Option<&Path>,
+    store: &str,
+    invoice_no: &str,
+    order_no: &str,
+    source_file: &str,
+) -> Result<()> {
+    let mut candidates = Vec::new();
+    let stored = source_file.trim();
+    if !stored.is_empty() {
+        candidates.push(PathBuf::from(stored));
+        if let Some(parent) = source_db.parent() {
+            candidates.push(parent.join(stored));
+            candidates.push(parent.join("receipts").join(stored));
+        }
+        if let Some(dir) = receipts_dir {
+            candidates.push(dir.join(stored));
+        }
+    }
+    let folded: String = store
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .flat_map(|c| c.to_lowercase())
+        .collect();
+    let mut names = vec![invoice_no.to_string()];
+    if !order_no.trim().is_empty() {
+        names.push(order_no.trim().to_string());
+        names.push(format!("order-{}", order_no.trim()));
+    }
+    let folders = [store.to_string(), folded];
+    let exts = ["pdf", "html", "htm", "png", "jpg", "jpeg", "webp", "gif"];
+    let mut roots = Vec::new();
+    if let Some(dir) = receipts_dir {
+        roots.push(dir.to_path_buf());
+    }
+    if let Some(parent) = source_db.parent() {
+        roots.push(parent.join("receipts"));
+    }
+    for root in roots {
+        for folder in &folders {
+            for name in &names {
+                for ext in exts {
+                    candidates.push(root.join(folder).join(format!("{name}.{ext}")));
+                }
+            }
+        }
+    }
+    crate::receipts::bind_receipt_file(dest, invoice_id, &candidates)?;
     Ok(())
 }
 
