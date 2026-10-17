@@ -1,0 +1,459 @@
+/* Widget sheet. The app fills the palette tokens. Omarchy does not render this file. */
+window.omabring {
+  --omabring-bg: {{ background }};
+  --omabring-surface: {{ lighter_background }};
+  --omabring-fg: {{ foreground }};
+  --omabring-accent: {{ accent }};
+  --omabring-accent-fg: {{ accent_fg }};
+  --omabring-muted: {{ muted }};
+  --omabring-sidebar-bg: {{ darker_background }};
+  --omabring-card-bg: {{ lighter_background }};
+  --omabring-selection: {{ selection }};
+  --omabring-border: {{ border }};
+  --omabring-line: {{ border }};
+  --omabring-fill: {{ accent }};
+  --omabring-on-fill: {{ accent_fg }};
+  --omabring-danger: {{ red }};
+  --omabring-ok: {{ green }};
+  --omabring-warn: {{ yellow }};
+  background-color: var(--omabring-bg);
+  color: var(--omabring-fg);
+  font-family: {{ font }};
+  font-size: 11px;
+  border: none;
+  border-radius: {{ rounding }}px;
+}
+
+window.omabring,
+window.omabring * {
+  font-family: {{ font }};
+  border-radius: 0;
+  box-shadow: none;
+  outline: none;
+}
+
+window.omabring label,
+window.omabring entry,
+window.omabring text,
+window.omabring textview {
+  color: var(--omabring-fg);
+}
+
+window.omabring .bf-header {
+  background-color: var(--omabring-bg);
+  border-bottom: 1px dashed var(--omabring-line);
+}
+
+window.omabring .bf-mark {
+  background-color: var(--omabring-fill);
+  color: var(--omabring-on-fill);
+  font-weight: 700;
+  font-size: 9px;
+  min-width: 18px;
+  min-height: 18px;
+}
+
+window.omabring .bf-brand {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+window.omabring .bf-kicker {
+  color: var(--omabring-muted);
+  font-size: 9px;
+  letter-spacing: 0.6px;
+}
+
+window.omabring .bf-field {
+  color: var(--omabring-muted);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+}
+
+window.omabring .bf-muted {
+  color: var(--omabring-muted);
+  font-size: 11px;
+}
+
+window.omabring .bf-h1 {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+window.omabring .bf-h1-sm {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+window.omabring .bf-go {
+  color: var(--omabring-accent);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+}
+
+window.omabring .bf-link,
+window.omabring .bf-link label {
+  color: var(--omabring-accent);
+}
+
+window.omabring .bf-delta {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+window.omabring .bf-ok {
+  color: var(--omabring-fg);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+window.omabring .bf-danger {
+  color: var(--omabring-danger);
+}
+
+window.omabring button {
+  background-color: var(--omabring-fill);
+  color: var(--omabring-on-fill);
+  border: 1px solid var(--omabring-fill);
+  border-radius: 0;
+  padding: 2px 7px;
+  min-height: 0;
+  min-width: 0;
+  font-size: 11px;
+  font-weight: 700;
+  box-shadow: none;
+}
+
+window.omabring button label {
+  color: var(--omabring-on-fill);
+  font-weight: 700;
+}
+
+window.omabring button.bf-ghost,
+window.omabring button.bf-ghost label {
+  background-color: transparent;
+  color: var(--omabring-fg);
+  border-color: var(--omabring-line);
+}
+
+window.omabring button.bf-chip,
+window.omabring button.bf-chip label {
+  background-color: transparent;
+  color: var(--omabring-muted);
+  border: 1px solid var(--omabring-line);
+  padding: 1px 5px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0;
+  min-height: 0;
+}
+
+window.omabring button.bf-tab,
+window.omabring button.bf-tab label {
+  background-color: transparent;
+  color: var(--omabring-muted);
+  border: 1px solid transparent;
+  padding: 2px 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0;
+  min-height: 0;
+}
+
+window.omabring button.bf-chip.on,
+window.omabring button.bf-tab.on,
+window.omabring button.bf-chip.on label,
+window.omabring button.bf-tab.on label {
+  background-color: var(--omabring-fill);
+  color: var(--omabring-on-fill);
+  border-color: var(--omabring-fill);
+}
+
+window.omabring button:focus-visible,
+window.omabring entry:focus-visible,
+window.omabring textview:focus-visible {
+  outline: 1px solid var(--omabring-accent);
+  outline-offset: 1px;
+}
+
+window.omabring button.bf-tab:focus,
+window.omabring entry:focus {
+  border-color: var(--omabring-accent);
+}
+
+window.omabring .bf-card {
+  background-color: var(--omabring-bg);
+  color: var(--omabring-fg);
+  border: 1px solid var(--omabring-line);
+  padding: 6px 8px;
+}
+
+window.omabring .bf-dash {
+  padding: 4px 6px 2px;
+}
+
+window.omabring .bf-filters,
+window.omabring .bf-pin {
+  background-color: var(--omabring-bg);
+  border-bottom: 1px solid var(--omabring-line);
+  padding: 2px 8px 3px;
+}
+
+window.omabring .bf-agent,
+window.omabring .bf-agent-icon {
+  color: var(--omabring-fg);
+}
+
+window.omabring .bf-agent {
+  background-color: transparent;
+  border: 1px solid var(--omabring-line);
+  padding: 1px;
+  min-width: 20px;
+  min-height: 20px;
+}
+
+window.omabring .bf-charts {
+  min-height: 20px;
+}
+
+window.omabring button.bf-chart,
+window.omabring button.bf-chart label {
+  padding: 1px 5px;
+  font-size: 10px;
+  min-height: 18px;
+}
+
+window.omabring .bf-logo-sm {
+  min-width: 16px;
+  min-height: 16px;
+  font-size: 9px;
+}
+
+window.omabring picture.bf-thumb {
+  background-color: transparent;
+  min-width: 22px;
+  min-height: 22px;
+}
+
+window.omabring .bf-stat {
+  min-width: 0;
+  padding: 1px 4px;
+}
+
+window.omabring flowbox.bf-stats,
+window.omabring flowboxchild {
+  background-color: transparent;
+  border: none;
+  padding: 0;
+}
+
+window.omabring .bf-theme {
+  background-color: transparent;
+  color: var(--omabring-fg);
+  border: 1px solid var(--omabring-line);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 6px;
+}
+
+window.omabring .bf-dashed {
+  border-style: dashed;
+}
+
+window.omabring .bf-pill {
+  color: var(--omabring-muted);
+  border: 1px solid var(--omabring-border);
+  padding: 0 4px;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+window.omabring .bf-pill.on {
+  background-color: var(--omabring-fill);
+  color: var(--omabring-on-fill);
+  border-color: var(--omabring-fill);
+}
+
+window.omabring .bf-cap {
+  background-color: var(--omabring-fill);
+  color: var(--omabring-on-fill);
+  padding: 0 4px;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+window.omabring .bf-cap.off {
+  background-color: transparent;
+  color: var(--omabring-muted);
+  border: 1px dashed var(--omabring-border);
+}
+
+window.omabring .bf-thumb,
+window.omabring .bf-logo {
+  font-size: 11px;
+  font-weight: 700;
+  background-color: var(--omabring-selection);
+  color: var(--omabring-fg);
+  min-width: 22px;
+  min-height: 22px;
+}
+
+window.omabring .bf-logo {
+  min-width: 32px;
+  min-height: 32px;
+  font-size: 13px;
+}
+
+window.omabring picture.bf-logo {
+  background-color: transparent;
+  min-width: 0;
+  min-height: 0;
+}
+
+window.omabring .logo-carrefour { background-color: #004e9f; color: #ffffff; }
+window.omabring .logo-union { background-color: #0b7a3e; color: #ffffff; }
+window.omabring .logo-grandiose { background-color: #1a1a1a; color: #d4af37; }
+window.omabring .logo-waitrose { background-color: #007a33; color: #ffffff; }
+window.omabring .logo-spinneys { background-color: #8b1e3f; color: #ffffff; }
+window.omabring .logo-mmi { background-color: #1a1a1a; color: #ffffff; }
+window.omabring .logo-african { background-color: #b11226; color: #ffffff; }
+window.omabring .logo-careem { background-color: #3bb54a; color: #ffffff; }
+window.omabring .logo-mcdonalds { background-color: #da291c; color: #ffc72c; }
+window.omabring .logo-amazon { background-color: #232f3e; color: #ff9900; }
+
+window.omabring .bf-bar,
+window.omabring button.bf-bar,
+window.omabring button.bf-bar:hover {
+  background-color: transparent;
+  border: none;
+  padding: 0;
+  min-height: 0;
+  min-width: 0;
+}
+
+window.omabring .bf-dash.is-focus {
+  background-color: var(--omabring-fg);
+  color: var(--omabring-bg);
+}
+
+window.omabring .bf-dash.is-focus label {
+  color: var(--omabring-bg);
+}
+
+window.omabring .bf-dash.is-focus .bf-bar-fill {
+  background-color: var(--omabring-bg);
+}
+
+@keyframes omabring-focus-tick {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0.35; }
+}
+
+window.omabring .bf-bar.focus,
+window.omabring button.bf-bar.focus {
+  animation: omabring-focus-tick 1.8s steps(2) infinite;
+}
+
+window.omabring button.bf-vote,
+window.omabring button.bf-vote label {
+  min-width: 16px;
+  min-height: 16px;
+  padding: 0 2px;
+  font-size: 10px;
+}
+
+window.omabring .bf-bar-fill,
+window.omabring .bf-donut {
+  background-color: var(--omabring-accent);
+  min-width: 0;
+}
+
+window.omabring .bf-bar.on {
+  border: 1px solid var(--omabring-accent);
+  color: var(--omabring-accent);
+}
+
+window.omabring .bf-row {
+  background-color: transparent;
+  border-bottom: 1px dashed var(--omabring-line);
+  padding: 1px 2px;
+}
+
+window.omabring .bf-row:hover,
+window.omabring .bf-row:hover label {
+  background-color: var(--omabring-selection);
+  color: var(--omabring-fg);
+}
+
+window.omabring .bf-thead {
+  border-bottom: 1px solid var(--omabring-line);
+  padding: 1px 2px;
+}
+
+window.omabring .bf-thead label {
+  color: var(--omabring-muted);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+window.omabring button.bf-th,
+window.omabring button.bf-th label {
+  background-color: transparent;
+  color: var(--omabring-muted);
+  border: none;
+  padding: 0;
+  font-size: 10px;
+  font-weight: 700;
+  min-height: 0;
+}
+
+window.omabring button.bf-th.on,
+window.omabring button.bf-th.on label {
+  background-color: transparent;
+  color: var(--omabring-fg);
+  border: none;
+}
+
+window.omabring entry,
+window.omabring passwordentry,
+window.omabring searchentry,
+window.omabring spinbutton {
+  background-color: var(--omabring-bg);
+  color: var(--omabring-fg);
+  border: 1px solid var(--omabring-line);
+  border-radius: 0;
+  box-shadow: none;
+  min-height: 0;
+  padding: 2px 6px;
+  font-size: 11px;
+}
+
+window.omabring textview,
+window.omabring textview text {
+  background-color: var(--omabring-bg);
+  color: var(--omabring-fg);
+}
+
+window.omabring scrolledwindow,
+window.omabring viewport {
+  background-color: var(--omabring-bg);
+  border: none;
+}
+
+window.omabring selection {
+  background-color: var(--omabring-accent);
+  color: var(--omabring-accent-fg);
+}
+
+window.omabring popover,
+window.omabring popover contents {
+  background-color: var(--omabring-surface);
+  color: var(--omabring-fg);
+  border: 1px solid var(--omabring-border);
+  border-radius: 0;
+}

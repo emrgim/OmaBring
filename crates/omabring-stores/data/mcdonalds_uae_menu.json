@@ -1,0 +1,517 @@
+[
+  {
+    "id": "mcd-big-breakfast-uae-1223",
+    "name": "Big Breakfast",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-big-breakfast-uae-1223:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-hotcake-uae-1223",
+    "name": "Hotcakes 3-Pieces",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-hotcake-uae-1223:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-egg-muffin-uae-1223",
+    "name": "Egg McMuffin\u2122",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-egg-muffin-uae-1223:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-sausage-muffin-uae-1223",
+    "name": "Chicken Sausage McMuffin\u2122",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-sausage-muffin-uae-1223:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-hashbrown-uae-1223",
+    "name": "Hash Browns",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-hashbrown-uae-1223:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-egg-sausage-wrap-uae-1223",
+    "name": "Egg N' Sausage wrap",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-egg-sausage-wrap-uae-1223:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-egg-hashbrown-wrap-uae-1223",
+    "name": "Egg N' Hash browns Wrap",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-egg-hashbrown-wrap-uae-1223:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-chicken-muffin-uae-1223",
+    "name": "Chicken Muffin",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-chicken-muffin-uae-1223:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-sausage-egg-muffin-uae-1223",
+    "name": "Sausage McMuffin with Egg\u2122",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-sausage-egg-muffin-uae-1223:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-big-tasty-uae-1223",
+    "name": "Big Tasty\u2122",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-big-tasty-uae-1223:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-QPC-uae-1223",
+    "name": "Quarter Pounder with Cheese\u2122",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-QPC-uae-1223:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-bigmac-uae-1223",
+    "name": "Big Mac\u2122",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-bigmac-uae-1223:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-double-cheeseburger-uae-1223",
+    "name": "Double Cheeseburger",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-double-cheeseburger-uae-1223:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-cheeseburger-uae-1223",
+    "name": "Cheeseburger",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-cheeseburger-uae-1223:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-beef-burger-uae-1223",
+    "name": "Beef Burger",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-beef-burger-uae-1223:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-QPC-Deluxe-uae-1024",
+    "name": "Quarter Pounder with Cheese Deluxe",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-QPC-Deluxe-uae-1024:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-McCrispy-Deluxe-uae-0426",
+    "name": "McCrispy Deluxe",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-McCrispy-Deluxe-uae-0426:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-Spicy-McCrispy-uae-0426",
+    "name": "Spicy McCrispy",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-Spicy-McCrispy-uae-0426:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "4pcs-Wings-uae",
+    "name": "4 pcs Chicken McWings",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/4pcs-Wings-uae:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-GrandChicken-Spicy-uae-1223",
+    "name": "Grand Chicken Spicy",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-GrandChicken-Spicy-uae-1223:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "1mcd-chicken-mac-uae-1223",
+    "name": "Chicken Mac\u2122",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/1mcd-chicken-mac-uae-1223:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "1mcd-Spicy-McChicken-uae-1223",
+    "name": "Spicy McChicken\u2122",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/1mcd-Spicy-McChicken-uae-1223:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-McChicken-uae-1223",
+    "name": "McChicken\u2122",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-McChicken-uae-1223:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "1mcd-chicken-burger-uae-1223",
+    "name": "Chickenburger",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/1mcd-chicken-burger-uae-1223:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-4pc-Chicken-McNuggets-uae-1223",
+    "name": "Chicken McNuggets\u2122",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-4pc-Chicken-McNuggets-uae-1223:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-fillet-O-Fish-uae-1223",
+    "name": "Filet-O-Fish\u2122",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-fillet-O-Fish-uae-1223:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "1mcd-McArabia-uae-1223",
+    "name": "McArabia Grilled Chicken",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/1mcd-McArabia-uae-1223:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "1mcd-Veggie-Deluxe-uae-1223",
+    "name": "Veggie Deluxe",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/1mcd-Veggie-Deluxe-uae-1223:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-grand-chicken-uae-1223",
+    "name": "Grand Chicken",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-grand-chicken-uae-1223:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-3pc-Chicken_Tenders--uae-1223",
+    "name": "Chicken Tenders",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-3pc-Chicken_Tenders--uae-1223:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-mccrispy-uae-0225",
+    "name": "McCrispy",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-mccrispy-uae-0225:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-McCrispy-Deluxe-Meal-uae-0426",
+    "name": "McCrispy Deluxe Meal",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-McCrispy-Deluxe-Meal-uae-0426:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-Spicy-McCrispy-Meal-uae-0426",
+    "name": "Spicy McCrispy Meal",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-Spicy-McCrispy-Meal-uae-0426:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-Veggie-Deluxe-Meal-uae-1223",
+    "name": "Veggie Deluxe Meal",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-Veggie-Deluxe-Meal-uae-1223:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-6pc-Nuggets-Meal-uae-0824",
+    "name": "6 pcs Chicken McNuggets Meal",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-6pc-Nuggets-Meal-uae-0824:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-BIg-Mac-Meal-uae-0724",
+    "name": "Big Mac Meal",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-BIg-Mac-Meal-uae-0724:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-ChickenMac-Meal-uae-0724",
+    "name": "Chicken Mac Meal",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-ChickenMac-Meal-uae-0724:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-McChicken-Meal-uae-0724",
+    "name": "McChicken Meal",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-McChicken-Meal-uae-0724:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-Big-Tasty-Meal-uae-0724",
+    "name": "Big Tasty Meal",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-Big-Tasty-Meal-uae-0724:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-QPC-Meal-uae-0724",
+    "name": "Quarter Pounder with Cheese Meal",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-QPC-Meal-uae-0724:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-9pc-Chicken-McNuggets-Meal-uae-0824",
+    "name": "9 Pcs Chicken McNuggets Meal",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-9pc-Chicken-McNuggets-Meal-uae-0824:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-Spicy-McChicken-Meal-uae-0724",
+    "name": "Spicy McChicken Meal",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-Spicy-McChicken-Meal-uae-0724:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-Grand-Chicken-Spicy-meal-uae-0724",
+    "name": "Grand Chicken Spicy Meal",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-Grand-Chicken-Spicy-meal-uae-0724:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-McArabia-Meal-uae-0724",
+    "name": "McArabia Chicken Meal",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-McArabia-Meal-uae-0724:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-Fillet-O-Fish-Meal-uae-0724",
+    "name": "Filet-O-Fish Meal",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-Fillet-O-Fish-Meal-uae-0724:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-Grand-Chicken-Meal-uae-0724",
+    "name": "Grand Chicken Meal",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-Grand-Chicken-Meal-uae-0724:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-QPC-Deluxe-Meal-uae-1024",
+    "name": "Quarter Pounder with Cheese Deluxe Meal",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-QPC-Deluxe-Meal-uae-1024:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-mccrispy-meal-uae-0225",
+    "name": "McCrispy Meal",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-mccrispy-meal-uae-0225:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-Pineapple-sticks-uae-1223",
+    "name": "Pineapple Stick",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-Pineapple-sticks-uae-1223:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-small-Fries-uae-1223",
+    "name": "Fries",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-small-Fries-uae-1223:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-Banana-uae-1223",
+    "name": "Banana",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-Banana-uae-1223:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-Chicken-Ceaser-Salad-uae-1223",
+    "name": "Chicken Caesar Salad",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-Chicken-Ceaser-Salad-uae-1223:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-McFlurry-Oreo-uae-1223",
+    "name": "McFlurry\u2122 Oreo",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-McFlurry-Oreo-uae-1223:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-KitKat-McFlurry-uae-1223",
+    "name": "Kitkat McFlurry\u2122",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-KitKat-McFlurry-uae-1223:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-Hot-Fudge-Sundae-uae-1223",
+    "name": "Hot Fudge Sundae",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-Hot-Fudge-Sundae-uae-1223:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-Strawberry-Sundae-uae-1223",
+    "name": "Strawberry Sundae",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-Strawberry-Sundae-uae-1223:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-Caramel-Sundae-uae-1223",
+    "name": "Caramel Sundae",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-Caramel-Sundae-uae-1223:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-Ice-Cream-Cone-uae-1223",
+    "name": "Ice Cream Cone",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-Ice-Cream-Cone-uae-1223:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-FuzeTea-uae-0824",
+    "name": "Frutea Ice Tea Peach Flavor",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-FuzeTea-uae-0824:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-Apple-juice-uae-0724",
+    "name": "Minute Maid Apple Juice",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-Apple-juice-uae-0724:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-Coca-cola-uae-0724",
+    "name": "Coca-Cola\u2122",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-Coca-cola-uae-0724:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-Coca-cola_ZERO-uae-0724",
+    "name": "Small Coca-Cola Zero Sugar",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-Coca-cola_ZERO-uae-0724:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-Sprite-uae-1223",
+    "name": "Sprite",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-Sprite-uae-1223:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-Fanta-uae-0724",
+    "name": "Fanta",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-Fanta-uae-0724:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-chocolate-milk-uae-1223",
+    "name": "Chocolate Milk",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-chocolate-milk-uae-1223:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "full-cream-milk-uae-1223",
+    "name": "Full Cream Milk",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/full-cream-milk-uae-1223:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-Orange-Juice-uae-0724",
+    "name": "Minute Maid Orange Juice",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-Orange-Juice-uae-0724:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-Sprite-ZERO-uae-0724",
+    "name": "Small Sprite Zero Sugar",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-Sprite-ZERO-uae-0724:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-Hot-Chocolate-uae-1223",
+    "name": "Hot Chocolate",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-Hot-Chocolate-uae-1223:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-Mocha-uae-1223",
+    "name": "Mocha",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-Mocha-uae-1223:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-Latte-uae-1223",
+    "name": "Latte",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-Latte-uae-1223:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-Cappuccino-uae-1223",
+    "name": "Cappuccino",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-Cappuccino-uae-1223:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-Americano",
+    "name": "Americano",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-Americano:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-Espresso-uae-1223",
+    "name": "Espresso",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-Espresso-uae-1223:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-Tea-uae-1223",
+    "name": "Tea",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-Tea-uae-1223:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-blueberry-Cheesecake-0124-uae",
+    "name": "Blueberry Cheesecake",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-blueberry-Cheesecake-0124-uae:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-Choco-Fudge-0124-uae",
+    "name": "Chocolate Fudge",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-Choco-Fudge-0124-uae:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-Red-Velvet-0124-uae",
+    "name": "Red Velvet Cake",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-Red-Velvet-0124-uae:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-Sugar-Donut-0124-uae",
+    "name": "Sugar Donut",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-Sugar-Donut-0124-uae:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-Triple-Choco-Muffin-0124-uae",
+    "name": "Triple Chocolate Muffin",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-Triple-Choco-Muffin-0124-uae:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-Skinny-BB-Muffin-0124-uae",
+    "name": "Skinny Blueberry Muffin",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-Skinny-BB-Muffin-0124-uae:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-Cheese-Croissant-0124-uae",
+    "name": "Cheese Croissant",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-Cheese-Croissant-0124-uae:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-Choco-Croissant-0124-uae",
+    "name": "Chocolate Croissant",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-Choco-Croissant-0124-uae:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-Chocolate-Frappe-uae-1223",
+    "name": "Chocolate Frappe",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-Chocolate-Frappe-uae-1223:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-Vanilla-Frappe-uae-1223",
+    "name": "Vanilla Frappe",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-Vanilla-Frappe-uae-1223:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-Iced-Latte-uae-1223",
+    "name": "Iced Latte",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-Iced-Latte-uae-1223:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-Plain-Croissant-0124-uae",
+    "name": "Plain Croissant",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-Plain-Croissant-0124-uae:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-3pc-Macarons-0124-uae",
+    "name": "Macarons",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-3pc-Macarons-0124-uae:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-Milk-Choco-Chunk-Cookie-0124-uae",
+    "name": "Milk Chocolate Chunk Cookie",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-Milk-Choco-Chunk-Cookie-0124-uae:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-Choco-Cookie-0124-uae",
+    "name": "Double Chocolate Cookie",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-Choco-Cookie-0124-uae:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-McPops-uae-0124",
+    "name": "McPops Choco-Hazelnut",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-McPops-uae-0124:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-beefburger-with-pineapple-uae-0125",
+    "name": "Happy Meal Beefburger with Pineapple Stick",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-beefburger-with-pineapple-uae-0125:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-cheeseburger-with-pineapple-uae-0125",
+    "name": "Happy Meal Cheeseburger with Pineapple Stick",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-cheeseburger-with-pineapple-uae-0125:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-chickenburger-with-pineapple-uae-0125",
+    "name": "Happy Meal Chickenburger with Pineapple Stick",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-chickenburger-with-pineapple-uae-0125:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-chickennuggets-with-pineapple-uae-0125",
+    "name": "Happy Meal McNuggets with Pineapple Stick",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-chickennuggets-with-pineapple-uae-0125:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-chickenburger-with-fries-uae-0125",
+    "name": "Happy Meal Chickenburger and Fries",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-chickenburger-with-fries-uae-0125:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-chickennuggets-with-fries-uae-0125",
+    "name": "Happy Meal Chicken McNuggets and Fries",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-chickennuggets-with-fries-uae-0125:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-cheeseburger-with-fries-uae-0125",
+    "name": "Happy Meal Cheeseburger and Fries",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-cheeseburger-with-fries-uae-0125:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-beefburger-with-fries-uae-0125",
+    "name": "Happy Meal Beefburger and Fries",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-beefburger-with-fries-uae-0125:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-chickenburger-with-banana-uae-0125",
+    "name": "Happy Meal Chickenburger with Banana",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-chickenburger-with-banana-uae-0125:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-chickennuggets-with-banana-uae-0125",
+    "name": "Happy Meal Chicken McNuggets with Banana",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-chickennuggets-with-banana-uae-0125:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-cheeseburger-with-banana-uae-0125",
+    "name": "Happy Meal Cheeseburger with Banana",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-cheeseburger-with-banana-uae-0125:nutrition-calculator-tile?fmt=webp&wid=256"
+  },
+  {
+    "id": "mcd-hm-beefburger-with-banana-uae-0125",
+    "name": "Happy Meal Beefburger with Banana",
+    "image_url": "https://s7d1.scene7.com/is/image/mcdonalds/mcd-hm-beefburger-with-banana-uae-0125:nutrition-calculator-tile?fmt=webp&wid=256"
+  }
+]
