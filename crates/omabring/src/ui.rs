@@ -127,11 +127,14 @@ pub fn open_window(app: &adw::Application, core: Arc<App>, backend: Arc<Registry
         .default_width(width)
         .default_height(height)
         .build();
+    let (min_w, min_h) = crate::window_min();
     if forced {
         window.set_size_request(width, height);
+    } else {
+        window.set_size_request(min_w, min_h);
     }
     window.add_css_class("omabring");
-    if width < 600 {
+    if width < 1000 {
         window.add_css_class("bf-compact");
     }
     window.set_decorated(false);
@@ -298,7 +301,7 @@ fn build_chrome(
         backend,
         window: window.clone(),
         toast: toast.clone(),
-        content: gtk::Box::new(gtk::Orientation::Vertical, 4),
+        content: gtk::Box::new(gtk::Orientation::Vertical, 2),
         pinned,
         tab_search: tab("Search"),
         tab_dash: tab("Dashboard"),
@@ -352,10 +355,10 @@ fn chrome_root(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
     let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
     let header = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     header.add_css_class("bf-header");
-    header.set_margin_top(2);
-    header.set_margin_bottom(2);
-    header.set_margin_start(6);
-    header.set_margin_end(6);
+    header.set_margin_top(0);
+    header.set_margin_bottom(0);
+    header.set_margin_start(4);
+    header.set_margin_end(4);
 
     let mark = gtk::Label::new(Some("OB"));
     mark.add_css_class("bf-mark");
@@ -400,10 +403,10 @@ fn chrome_root(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
         .build();
     shell.borrow().content.set_hexpand(true);
     shell.borrow().content.set_halign(gtk::Align::Fill);
-    shell.borrow().content.set_margin_top(4);
-    shell.borrow().content.set_margin_bottom(6);
-    shell.borrow().content.set_margin_start(6);
-    shell.borrow().content.set_margin_end(6);
+    shell.borrow().content.set_margin_top(2);
+    shell.borrow().content.set_margin_bottom(4);
+    shell.borrow().content.set_margin_start(4);
+    shell.borrow().content.set_margin_end(4);
     scroll.set_propagate_natural_width(false);
     scroll.set_propagate_natural_height(false);
     root.append(&header);
@@ -905,10 +908,10 @@ fn purchases(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
 
 /// The spend chart. It stays above the scroller on Dashboard and Purchases.
 fn spend_chart(shell: &Rc<RefCell<Shell>>, purchases: bool) -> gtk::Box {
-    let dash = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    let dash = gtk::Box::new(gtk::Orientation::Vertical, 3);
     dash.add_css_class("bf-card");
     dash.add_css_class("bf-dash");
-    let narrow = crate::window_size().0 < 600;
+    let narrow = frame_width() < 1000;
     let top = gtk::Box::new(
         if narrow {
             gtk::Orientation::Vertical
@@ -983,7 +986,13 @@ fn purchase_cards(shell: &Rc<RefCell<Shell>>, products: &[Prod]) -> gtk::Box {
     sorts.set_selection_mode(gtk::SelectionMode::None);
     sorts.set_column_spacing(4);
     sorts.set_row_spacing(2);
-    let per_line = if crate::window_size().0 < 600 { 4 } else { 7 };
+    let per_line = if frame_width() < 800 {
+        3
+    } else if frame_width() < 1100 {
+        4
+    } else {
+        7
+    };
     sorts.set_min_children_per_line(2);
     sorts.set_max_children_per_line(per_line);
     sorts.set_homogeneous(false);
@@ -1022,7 +1031,8 @@ fn purchase_card(shell: &Rc<RefCell<Shell>>, product: &Prod) -> gtk::Box {
     let card = gtk::Box::new(gtk::Orientation::Horizontal, 10);
     card.add_css_class("bf-card");
     card.add_css_class("bf-mcard");
-    card.append(&product_thumb(shell, &product.name, 56));
+    let thumb = if frame_width() < 800 { 40 } else { 48 };
+    card.append(&product_thumb(shell, &product.name, thumb));
     let copy = gtk::Box::new(gtk::Orientation::Vertical, 4);
     copy.set_hexpand(true);
     copy.set_halign(gtk::Align::Fill);
@@ -1102,7 +1112,7 @@ fn grain_row(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
 }
 
 fn range_row(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
-    let narrow = crate::window_size().0 < 600;
+    let narrow = frame_width() < 1100;
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
     let flow = gtk::FlowBox::new();
     flow.set_selection_mode(gtk::SelectionMode::None);
@@ -1110,8 +1120,15 @@ fn range_row(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
     flow.set_row_spacing(2);
     flow.set_homogeneous(false);
     flow.set_hexpand(true);
-    flow.set_min_children_per_line(if narrow { 4 } else { 8 });
-    flow.set_max_children_per_line(if narrow { 4 } else { 8 });
+    let per_line = if frame_width() < 800 {
+        4
+    } else if narrow {
+        6
+    } else {
+        8
+    };
+    flow.set_min_children_per_line(per_line.min(4));
+    flow.set_max_children_per_line(per_line);
     let custom = shell.borrow().custom;
     let days = shell.borrow().range_days;
     for (len, label) in [
@@ -1145,11 +1162,11 @@ fn date_row(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
     let start = gtk::Entry::new();
     start.set_placeholder_text(Some("Start"));
-    start.set_width_chars(10);
+    start.set_width_chars(8);
     start.set_text(&shell.borrow().custom_start);
     let end = gtk::Entry::new();
     end.set_placeholder_text(Some("End"));
-    end.set_width_chars(10);
+    end.set_width_chars(8);
     end.set_text(&shell.borrow().custom_end);
     let apply = gtk::Button::with_label("APPLY");
     apply.add_css_class("bf-ghost");
@@ -1178,22 +1195,30 @@ struct BarLayout {
     centre: bool,
 }
 
+fn frame_width() -> i32 {
+    crate::window_size().0
+}
+
 fn bar_layout(count: usize) -> BarLayout {
-    let (_, window_h, _) = crate::window_size();
-    let mut height: f64 = if count <= 6 { 72.0 } else { 52.0 };
-    if window_h < 360 {
-        height *= 0.4;
-    } else if window_h < 480 {
+    let (window_w, window_h, _) = crate::window_size();
+    let mut height: f64 = if count <= 6 { 48.0 } else { 36.0 };
+    if window_h < 460 {
         height *= 0.55;
+    } else if window_h < 640 {
+        height *= 0.75;
+    } else if window_h >= 760 {
+        height *= 1.15;
     }
-    height = height.max(24.0);
+    height = height.max(20.0);
     // A handful of bars keep a modest width and sit in the centre.
     // More than that share the card, with no per-bar minimum.
     let width = if count > 0 && count <= 6 {
-        if crate::window_size().0 < 600 {
+        if window_w < 800 {
+            28
+        } else if window_w < 1100 {
             40
         } else {
-            56
+            52
         }
     } else {
         -1
@@ -1427,28 +1452,32 @@ fn product_table(shell: &Rc<RefCell<Shell>>, products: &[Prod], full: bool) -> g
     tools.add_css_class("bf-thead");
     tools.append(&shortage_header(shell));
     card.append(&tools);
+    let wide = frame_width() >= 1100;
+    let mid = frame_width() >= 860;
     let head = gtk::Box::new(gtk::Orientation::Horizontal, 4);
     head.add_css_class("bf-thead");
-    head.append(&cell("", 22, false));
+    head.append(&cell("", 18, false));
     let name = sort_header(shell, "Product", SortKey::Name, 0, false);
     name.set_hexpand(true);
     head.append(&name);
-    if full {
-        head.append(&sort_header(shell, "Last", SortKey::Last, 78, false));
+    if full && mid {
+        head.append(&sort_header(shell, "Last", SortKey::Last, 0, false));
     }
-    head.append(&sort_header(shell, "Times", SortKey::Times, 42, true));
-    if full {
-        head.append(&sort_header(shell, "Units", SortKey::Qty, 48, true));
+    head.append(&sort_header(shell, "Times", SortKey::Times, 0, true));
+    if full && wide {
+        head.append(&sort_header(shell, "Units", SortKey::Qty, 0, true));
         head.append(&sort_header(
             shell,
             "Frequency",
             SortKey::Frequency,
-            88,
+            0,
             false,
         ));
-        head.append(&sort_header(shell, "Likely", SortKey::Likely, 72, true));
     }
-    head.append(&sort_header(shell, "Spent", SortKey::Spent, 78, true));
+    if full && mid {
+        head.append(&sort_header(shell, "Likely", SortKey::Likely, 0, true));
+    }
+    head.append(&sort_header(shell, "Spent", SortKey::Spent, 0, true));
     card.append(&head);
     if products.is_empty() {
         let empty = gtk::Label::new(Some(if shell.borrow().shortage {
@@ -1465,24 +1494,26 @@ fn product_table(shell: &Rc<RefCell<Shell>>, products: &[Prod], full: bool) -> g
     for product in products {
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
         row.add_css_class("bf-row");
-        row.append(&product_thumb(shell, &product.name, 22));
+        row.append(&product_thumb(shell, &product.name, 18));
         let name = cell(&product.name, 0, false);
         name.set_hexpand(true);
         row.append(&name);
-        if full {
+        if full && mid {
             row.append(&cell(
                 &product.last.format("%Y-%m-%d").to_string(),
-                78,
+                0,
                 false,
             ));
         }
-        row.append(&cell(&product.times.to_string(), 42, true));
-        if full {
-            row.append(&cell(&qty_text(product.qty), 48, true));
-            row.append(&cell(&frequency_label(product), 88, false));
+        row.append(&cell(&product.times.to_string(), 0, true));
+        if full && wide {
+            row.append(&cell(&qty_text(product.qty), 0, true));
+            row.append(&cell(&frequency_label(product), 0, false));
+        }
+        if full && mid {
             row.append(&likely_votes(shell, &product.name, product.likely));
         }
-        row.append(&cell(&format!("AED {:.2}", product.spent), 78, true));
+        row.append(&cell(&format!("AED {:.0}", product.spent), 0, true));
         let click = gtk::GestureClick::new();
         let shell_click = shell.clone();
         let product_name = product.name.clone();
@@ -1512,10 +1543,18 @@ fn stores_page(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
     lead.add_css_class("bf-muted");
     wrap_label(&lead);
     page.append(&lead);
+    let cols = if frame_width() >= 1200 {
+        3
+    } else if frame_width() >= 900 {
+        2
+    } else {
+        1
+    };
     let grid = gtk::Grid::new();
-    grid.set_column_spacing(6);
-    grid.set_row_spacing(6);
+    grid.set_column_spacing(4);
+    grid.set_row_spacing(4);
     grid.set_column_homogeneous(true);
+    grid.set_hexpand(true);
     let links = shell.borrow().core.list_store_links().unwrap_or_default();
     for (index, id) in StoreId::all().into_iter().enumerate() {
         let linked = links.iter().find(|link| link.id == id);
@@ -1525,7 +1564,9 @@ fn stores_page(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
             linked.and_then(|link| link.username.clone()),
             linked.map(|link| link.linked).unwrap_or(false),
         );
-        grid.attach(&card, (index % 2) as i32, (index / 2) as i32, 1, 1);
+        let column = (index % cols) as i32;
+        let row = (index / cols) as i32;
+        grid.attach(&card, column, row, 1, 1);
     }
     page.append(&grid);
     page
@@ -1595,8 +1636,14 @@ fn store_status(id: StoreId, linked: bool, username: Option<String>) -> gtk::Lab
     label
 }
 
-fn caps_row(id: StoreId, linked: bool) -> gtk::Box {
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+fn caps_row(id: StoreId, linked: bool) -> gtk::FlowBox {
+    let row = gtk::FlowBox::new();
+    row.set_selection_mode(gtk::SelectionMode::None);
+    row.set_column_spacing(3);
+    row.set_row_spacing(2);
+    row.set_max_children_per_line(if frame_width() < 900 { 3 } else { 6 });
+    row.set_min_children_per_line(2);
+    row.set_hexpand(true);
     for (label, on) in [
         ("SEARCH", id.search()),
         ("COMPARE", id.search()),
@@ -1610,7 +1657,7 @@ fn caps_row(id: StoreId, linked: bool) -> gtk::Box {
         if !on {
             cap.add_css_class("off");
         }
-        row.append(&cap);
+        row.insert(&cap, -1);
     }
     row
 }
@@ -1743,14 +1790,21 @@ fn cart_card(shell: &Rc<RefCell<Shell>>, id: StoreId) -> gtk::Box {
     for line in &lines {
         card.append(&cart_line(shell, id, line));
     }
-    let add = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+    let add = gtk::Box::new(
+        if frame_width() < 900 {
+            gtk::Orientation::Vertical
+        } else {
+            gtk::Orientation::Horizontal
+        },
+        4,
+    );
     let name = gtk::Entry::new();
     name.set_placeholder_text(Some("Product name"));
     name.set_hexpand(true);
     let qty = gtk::SpinButton::with_range(1.0, 99.0, 1.0);
     let price = gtk::Entry::new();
     price.set_placeholder_text(Some("Price"));
-    price.set_width_request(80);
+    price.set_width_chars(6);
     let button = gtk::Button::with_label("ADD");
     let core = shell.borrow().core.clone();
     let toast = shell.borrow().toast.clone();
@@ -1945,7 +1999,11 @@ fn product_page(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
 
     let history = shell.borrow().core.product_history(&name).ok();
     let hero = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    hero.append(&product_thumb(shell, &name, 64));
+    hero.append(&product_thumb(
+        shell,
+        &name,
+        if frame_width() < 900 { 40 } else { 48 },
+    ));
     let title = history
         .as_ref()
         .map(|item| item.name.to_uppercase())
@@ -1956,10 +2014,16 @@ fn product_page(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
     let stats = gtk::FlowBox::new();
     stats.add_css_class("bf-stats");
     stats.set_selection_mode(gtk::SelectionMode::None);
-    stats.set_column_spacing(8);
-    stats.set_row_spacing(4);
+    stats.set_column_spacing(4);
+    stats.set_row_spacing(2);
     stats.set_min_children_per_line(2);
-    stats.set_max_children_per_line(4);
+    stats.set_max_children_per_line(if frame_width() < 800 {
+        2
+    } else if frame_width() < 1100 {
+        3
+    } else {
+        4
+    });
     stats.set_homogeneous(true);
     stats.set_hexpand(true);
     if let Some(item) = &history {
@@ -2016,7 +2080,8 @@ fn offer_row(shell: &Rc<RefCell<Shell>>, offer: &Offer) -> gtk::Box {
         omabring_core::OfferSource::Live => "live",
         omabring_core::OfferSource::History => "receipt",
     };
-    let store_name = cell(&store_label(offer.store).to_uppercase(), 96, false);
+    let store_name = cell(&store_label(offer.store).to_uppercase(), 0, false);
+    store_name.set_max_width_chars(if frame_width() < 900 { 10 } else { 16 });
     let product = cell(&offer.name, 0, false);
     product.set_hexpand(true);
     let price_label = cell(
@@ -2024,9 +2089,11 @@ fn offer_row(shell: &Rc<RefCell<Shell>>, offer: &Offer) -> gtk::Box {
             "{:.2} {} / {} · {source}",
             offer.price, offer.currency, offer.unit
         ),
-        148,
+        0,
         true,
     );
+    price_label.set_wrap(true);
+    price_label.set_max_width_chars(if frame_width() < 900 { 14 } else { 22 });
     let add = gtk::Button::with_label("ADD");
     let core = shell.borrow().core.clone();
     let toast = shell.borrow().toast.clone();
@@ -2091,9 +2158,15 @@ fn product_chart(shell: &Rc<RefCell<Shell>>, item: &omabring_core::ProductHistor
 }
 
 fn chart_selector(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-    row.add_css_class("bf-charts");
-    row.set_halign(gtk::Align::Start);
+    let row = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    let flow = gtk::FlowBox::new();
+    flow.add_css_class("bf-charts");
+    flow.set_selection_mode(gtk::SelectionMode::None);
+    flow.set_column_spacing(3);
+    flow.set_row_spacing(2);
+    flow.set_min_children_per_line(2);
+    flow.set_max_children_per_line(if frame_width() < 1000 { 4 } else { 7 });
+    flow.set_hexpand(true);
     for (kind, label) in [
         (ChartKind::Price, "Price"),
         (ChartKind::PriceByStore, "By store"),
@@ -2111,8 +2184,9 @@ fn chart_selector(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
             shell_click.borrow_mut().chart = kind;
             schedule(&shell_click);
         });
-        row.append(&button);
+        flow.insert(&button, -1);
     }
+    row.append(&flow);
     row
 }
 
@@ -2759,7 +2833,13 @@ fn agent_card(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
     hint.add_css_class("bf-muted");
     wrap_label(&hint);
     let (current, custom) = agent_choice(&shell.borrow().core);
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+    let row = gtk::FlowBox::new();
+    row.set_selection_mode(gtk::SelectionMode::None);
+    row.set_column_spacing(3);
+    row.set_row_spacing(2);
+    row.set_min_children_per_line(2);
+    row.set_max_children_per_line(if frame_width() < 900 { 3 } else { 7 });
+    row.set_hexpand(true);
     for (id, label) in [
         ("claude", "Claude Code"),
         ("codex", "Codex"),
@@ -2782,7 +2862,7 @@ fn agent_card(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
             }
             schedule(&shell_click);
         });
-        row.append(&button);
+        row.insert(&button, -1);
     }
     let entry = gtk::Entry::new();
     entry.set_placeholder_text(Some("Custom command"));
@@ -3456,11 +3536,9 @@ fn likely_kpi(shell: &Rc<RefCell<Shell>>, name: &str, likely: u8) -> gtk::Box {
 fn likely_votes(shell: &Rc<RefCell<Shell>>, name: &str, likely: u8) -> gtk::Box {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 2);
     row.set_halign(gtk::Align::End);
-    row.set_width_request(72);
     let value = gtk::Label::new(Some(&likely.to_string()));
     value.add_css_class("bf-brand");
     value.set_xalign(1.0);
-    value.set_width_request(22);
     row.append(&value);
     row.append(&vote_button(shell, name, 1));
     row.append(&vote_button(shell, name, -1));
@@ -3695,7 +3773,7 @@ fn startup_query() -> String {
 }
 
 fn store_logo(id: StoreId) -> gtk::Widget {
-    logo_picture(id, 32)
+    logo_picture(id, if frame_width() < 900 { 22 } else { 26 })
 }
 
 fn store_logo_small(id: StoreId) -> gtk::Widget {

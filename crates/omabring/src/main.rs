@@ -358,6 +358,12 @@ fn wants_image_search(args: &[String], env: Option<&str>) -> bool {
 /// How many missing pictures the open window asks the stores for.
 pub(crate) const BACKGROUND_IMAGE_LIMIT: usize = 8;
 
+/// Smallest size the layout still fits. The window will not shrink past this.
+pub(crate) fn window_min() -> (i32, i32) {
+    (560, 380)
+}
+
+/// `(width, height, from --size)`. The default is smaller than a SuperOmi screen.
 pub(crate) fn window_size() -> (i32, i32, bool) {
     if let Some(size) = std::env::var("OMABRING_SIZE")
         .ok()
@@ -366,7 +372,7 @@ pub(crate) fn window_size() -> (i32, i32, bool) {
     {
         return (size.0, size.1, true);
     }
-    (640, 520, false)
+    (720, 480, false)
 }
 
 /// Pictures from Bring Fast's cache and image URLs, then a catalog search.
