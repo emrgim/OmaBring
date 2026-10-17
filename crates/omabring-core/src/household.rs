@@ -172,48 +172,69 @@ impl App {
 
     /// True when this name was looked up in the last week, hit or miss.
     pub fn image_search_recent(&self, name: &str) -> Result<bool> {
-        let key = normalize_name(name);
-        if key.is_empty() {
+        self.image_search_recent_for(name, "")
+    }
+
+    /// True when the name, its Bring Fast slug, or its product key was looked up this week.
+    pub fn image_search_recent_for(&self, name: &str, product_key: &str) -> Result<bool> {
+        let keys = image_search_keys(name, product_key);
+        if keys.is_empty() {
             return Ok(false);
         }
-        let searched_at: Option<String> = self.with_conn(|conn| {
-            conn.query_row(
-                "SELECT searched_at FROM image_searches WHERE name_key = ?1",
-                params![key],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(Error::from)
+        let stamps: Vec<Option<String>> = self.with_conn(|conn| {
+            let mut stamps = Vec::new();
+            for key in &keys {
+                let stamp: Option<String> = conn
+                    .query_row(
+                        "SELECT searched_at FROM image_searches WHERE name_key = ?1",
+                        params![key],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
+                stamps.push(stamp);
+            }
+            Ok(stamps)
         })?;
-        let Some(searched_at) = searched_at else {
-            return Ok(false);
-        };
-        let Ok(then) = chrono::DateTime::parse_from_rfc3339(&searched_at) else {
-            return Ok(false);
-        };
-        let age = Utc::now().signed_duration_since(then.with_timezone(&Utc));
-        Ok(age.num_hours() < 24 * 7)
+        Ok(stamps
+            .into_iter()
+            .flatten()
+            .any(|stamp| search_is_recent(&stamp)))
     }
 
     /// Remembers a catalog search so the next import does not repeat it.
     pub fn remember_image_search(&self, name: &str, found: bool) -> Result<()> {
-        let key = normalize_name(name);
-        if key.is_empty() {
+        self.remember_image_search_for(name, "", found)
+    }
+
+    /// Records the miss or hit under the receipt name, the slug, and the product key.
+    pub fn remember_image_search_for(
+        &self,
+        name: &str,
+        product_key: &str,
+        found: bool,
+    ) -> Result<()> {
+        let keys = image_search_keys(name, product_key);
+        if keys.is_empty() {
             return Ok(());
         }
+        let stamp = now_rfc3339();
         self.with_conn(|conn| {
-            conn.execute(
-                "INSERT INTO image_searches (name_key, searched_at, found) VALUES (?1, ?2, ?3)
-                 ON CONFLICT(name_key) DO UPDATE SET searched_at = excluded.searched_at, found = excluded.found",
-                params![key, now_rfc3339(), i64::from(found)],
-            )?;
+            for key in &keys {
+                conn.execute(
+                    "INSERT INTO image_searches (name_key, searched_at, found) VALUES (?1, ?2, ?3)
+                     ON CONFLICT(name_key) DO UPDATE SET searched_at = excluded.searched_at, found = excluded.found",
+                    params![key, stamp, i64::from(found)],
+                )?;
+            }
             Ok(())
         })
     }
 
     /// Receipt names with no saved picture, and the store that sold them.
+    /// A name that already resolves to a picture, or that was searched in the
+    /// last seven days, is not included.
     pub fn products_missing_images(&self) -> Result<Vec<MissingImage>> {
-        self.with_conn(|conn| {
+        let candidates = self.with_conn(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT MIN(l.name), MIN(i.store), MAX(ifnull(l.product_key, ''))
                  FROM invoice_lines l
@@ -246,7 +267,19 @@ impl App {
                 });
             }
             Ok(out)
-        })
+        })?;
+        let mut out = Vec::new();
+        for item in candidates {
+            if self.product_image(&item.name).is_some()
+                || self
+                    .image_search_recent_for(&item.name, &item.product_key)
+                    .unwrap_or(false)
+            {
+                continue;
+            }
+            out.push(item);
+        }
+        Ok(out)
     }
 
     /// Picture URLs already stored on products imported from Bring Fast.
@@ -921,6 +954,32 @@ fn push_image_url(map: &mut std::collections::HashMap<String, Vec<String>>, key:
     }
 }
 
+fn image_search_keys(name: &str, product_key: &str) -> Vec<String> {
+    let mut keys = Vec::new();
+    let mut push = |key: &str| {
+        let key = key.trim();
+        if key.is_empty() || keys.iter().any(|have| have == key) {
+            return;
+        }
+        keys.push(key.to_string());
+    };
+    push(&normalize_name(name));
+    push(&bringfast_name_key(name));
+    push(product_key.trim());
+    push(&normalize_name(product_key));
+    keys
+}
+
+fn search_is_recent(stamp: &str) -> bool {
+    let Ok(then) = chrono::DateTime::parse_from_rfc3339(stamp) else {
+        // A row we cannot date still means this name was searched. Treat it as
+        // fresh so a bad timestamp cannot start the catalog walk again.
+        return true;
+    };
+    let age = Utc::now().signed_duration_since(then.with_timezone(&Utc));
+    age.num_hours() < 24 * 7
+}
+
 fn find_cached_image(keys: &[String], urls: &[String], dirs: &[PathBuf]) -> Option<Vec<u8>> {
     let mut files = Vec::new();
     for dir in dirs {
@@ -942,13 +1001,57 @@ fn find_cached_image(keys: &[String], urls: &[String], dirs: &[PathBuf]) -> Opti
         }
     }
     for path in files {
-        if let Ok(bytes) = fs::read(&path) {
-            if image_ext(&bytes).is_some() {
+        if let Some(bytes) = read_image_file(&path) {
+            return Some(bytes);
+        }
+    }
+    for dir in dirs {
+        let Ok(entries) = fs::read_dir(dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+                continue;
+            };
+            if !keys.iter().any(|key| cache_stem_matches(stem, key)) {
+                continue;
+            }
+            if let Some(bytes) = read_image_file(&path) {
                 return Some(bytes);
             }
         }
     }
     None
+}
+
+fn read_image_file(path: &Path) -> Option<Vec<u8>> {
+    let bytes = fs::read(path).ok()?;
+    image_ext(&bytes).map(|_| bytes)
+}
+
+/// Bring Fast names a file from `name:{slug}` (`name_tuna-steak.webp`).
+/// A receipt line is just `Tuna Steak`. Those are the same picture.
+fn cache_stem_matches(stem: &str, key: &str) -> bool {
+    let file = fold_stem(stem);
+    let key = fold_stem(key);
+    if file.len() < 4 || key.len() < 4 {
+        return false;
+    }
+    if file == key {
+        return true;
+    }
+    let file_body = file.strip_prefix("name").unwrap_or(file.as_str());
+    let key_body = key.strip_prefix("name").unwrap_or(key.as_str());
+    file_body.len() >= 4 && file_body == key_body
+}
+
+fn fold_stem(value: &str) -> String {
+    value
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .flat_map(|c| c.to_lowercase())
+        .collect()
 }
 
 pub(crate) fn fetch_image(url: &str) -> Option<Vec<u8>> {
@@ -1088,7 +1191,10 @@ mod tests {
             .into_iter()
             .flat_map(|invoice| invoice.lines.into_iter().map(|line| line.name))
             .collect();
-        assert_eq!(names, vec!["Tuna Steak".to_string()]);
+        assert!(names.iter().any(|name| name == "Tuna Steak"));
+        assert!(names.iter().any(|name| name == "Large (13\")"));
+        assert!(names.iter().all(|name| name != "Grandiose"));
+        assert!(names.iter().all(|name| name != "GRANDIOSE!!!"));
 
         let png = include_bytes!("../../../assets/demo/milk.png");
         let images = app.data_dir().join("product-images");
@@ -1141,13 +1247,54 @@ mod tests {
         assert!(app.image_search_recent("tuna  steak").unwrap());
         let old = (Utc::now() - chrono::Duration::days(30)).to_rfc3339();
         app.with_conn(|conn| {
-            conn.execute(
-                "UPDATE image_searches SET searched_at = ?1 WHERE name_key = ?2",
-                params![old, normalize_name("Tuna Steak")],
-            )?;
+            conn.execute("UPDATE image_searches SET searched_at = ?1", params![old])?;
             Ok(())
         })
         .unwrap();
         assert!(!app.image_search_recent("Tuna Steak").unwrap());
+    }
+
+    #[test]
+    fn a_cached_file_or_a_recent_miss_is_not_searched_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = App::open(dir.path()).unwrap();
+        app.with_conn(|conn| {
+            conn.execute(
+                "INSERT INTO invoices (store, invoice_no, purchased_on, currency, total) VALUES ('carrefour', 'C-1', '2026-10-01', 'AED', 20)",
+                [],
+            )?;
+            let id: i64 = conn.query_row(
+                "SELECT id FROM invoices WHERE invoice_no = 'C-1'",
+                [],
+                |row| row.get(0),
+            )?;
+            for name in ["Tuna Steak", "Cheese"] {
+                conn.execute(
+                    "INSERT INTO invoice_lines (invoice_id, name, name_key, qty, unit, unit_price, line_total, product_key) VALUES (?1, ?2, ?3, 1, 'piece', 10, 10, '')",
+                    params![id, name, normalize_name(name)],
+                )?;
+            }
+            Ok(())
+        })
+        .unwrap();
+        let cache = dir.path().join("cache");
+        fs::create_dir_all(&cache).unwrap();
+        let png = include_bytes!("../../../assets/demo/milk.png");
+        fs::write(cache.join("name_tuna-steak.png"), png).unwrap();
+        let keys = vec![
+            normalize_name("Tuna Steak"),
+            bringfast_name_key("Tuna Steak"),
+        ];
+        assert!(app
+            .adopt_product_image("Tuna Steak", &keys, &[], &[cache])
+            .unwrap());
+        app.remember_image_search_for("Cheese", "", false).unwrap();
+        let missing = app.products_missing_images().unwrap();
+        assert!(missing.iter().all(|item| item.name != "Tuna Steak"));
+        assert!(missing.iter().all(|item| item.name != "Cheese"));
+        assert!(app.image_search_recent("cheese").unwrap());
+        assert!(app
+            .image_search_recent_for("Cheese", "name:cheese")
+            .unwrap());
     }
 }

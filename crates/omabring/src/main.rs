@@ -362,27 +362,26 @@ fn backfill_images(core: &App, source: &std::path::Path, receipts_dir: Option<&s
             return;
         }
     };
-    let missing: Vec<_> = missing
-        .into_iter()
-        .filter(|item| {
-            core.product_image(&item.name).is_none()
-                && !core.image_search_recent(&item.name).unwrap_or(false)
-        })
-        .collect();
+    // products_missing_images already drops a saved picture and a search from
+    // the last seven days. Copy a Bring Fast file before asking a store.
     if missing.is_empty() {
+        eprintln!("image search skipped: every product has a picture or was searched this week");
         return;
     }
-    eprintln!("searching stores for {} product images", missing.len());
-    let dirs = omabring_core::product_image_dirs(Some(source), receipts_dir);
+    let mut dirs = omabring_core::product_image_dirs(Some(source), receipts_dir);
+    let own = core.data_dir().join("product-images");
+    if own.is_dir() && !dirs.iter().any(|dir| dir == &own) {
+        dirs.push(own);
+    }
     let mut urls = omabring_core::bringfast_image_index(source);
     if let Ok(stored) = core.stored_image_urls() {
         for (key, list) in stored {
             urls.entry(key).or_default().extend(list);
         }
     }
-    let backend = Registry::live();
+    let mut pending = Vec::new();
     let mut saved = 0usize;
-    for (index, item) in missing.iter().enumerate() {
+    for item in &missing {
         let mut keys = vec![
             omabring_core::normalize_name(&item.name),
             omabring_core::bringfast_name_key(&item.name),
@@ -396,12 +395,30 @@ fn backfill_images(core: &App, source: &std::path::Path, receipts_dir: Option<&s
                 item_urls.extend(list.clone());
             }
         }
-        let mut found = core
+        if core
             .adopt_product_image(&item.name, &keys, &item_urls, &dirs)
-            .unwrap_or(false);
-        if found {
+            .unwrap_or(false)
+        {
             saved += 1;
-        } else if item.store == omabring_core::StoreId::Mcdonalds {
+            if let Err(err) = core.remember_image_search_for(&item.name, &item.product_key, true) {
+                eprintln!(
+                    "could not remember the image search for {}: {err}",
+                    item.name
+                );
+            }
+        } else {
+            pending.push(item);
+        }
+    }
+    if pending.is_empty() {
+        eprintln!("saved {saved} product images from cache");
+        return;
+    }
+    eprintln!("searching stores for {} product images", pending.len());
+    let backend = Registry::live();
+    for (index, item) in pending.iter().enumerate() {
+        let mut found = false;
+        if item.store == omabring_core::StoreId::Mcdonalds {
             for query in image_queries(&item.name) {
                 let Some(url) = omabring_stores::mcdonalds_image(&query) else {
                     continue;
@@ -431,9 +448,14 @@ fn backfill_images(core: &App, source: &std::path::Path, receipts_dir: Option<&s
                 }
             }
         }
-        let _ = core.remember_image_search(&item.name, found);
+        if let Err(err) = core.remember_image_search_for(&item.name, &item.product_key, found) {
+            eprintln!(
+                "could not remember the image search for {}: {err}",
+                item.name
+            );
+        }
         if (index + 1) % 25 == 0 {
-            eprintln!("images {}/{} saved {saved}", index + 1, missing.len());
+            eprintln!("images {}/{} saved {saved}", index + 1, pending.len());
         }
     }
     eprintln!("saved {saved} product images");

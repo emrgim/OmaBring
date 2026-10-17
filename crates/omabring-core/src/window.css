@@ -311,6 +311,8 @@ window.omabring .bf-logo {
 
 window.omabring picture.bf-logo {
   background-color: transparent;
+  min-width: 0;
+  min-height: 0;
 }
 
 window.omabring .logo-carrefour { background-color: #004e9f; color: #ffffff; }

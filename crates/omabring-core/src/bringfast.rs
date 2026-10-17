@@ -1774,4 +1774,50 @@ COPY public.invoice_items (id, invoice_id, barcode, name, qty, unit_price, line_
         assert_eq!(invoices[0].invoice_no, "CRM-OK");
         assert_eq!(invoices[0].purchased_on, "2026-08-26");
     }
+
+    #[test]
+    fn a_second_import_puts_a_size_upcharge_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("bringfast.db");
+        let conn = Connection::open(&source).unwrap();
+        conn.execute_batch(MEMORY_SCHEMA).unwrap();
+        drop(conn);
+        let receipts = dir.path().join("receipts");
+        fs::create_dir_all(receipts.join("careem")).unwrap();
+        fs::write(
+            receipts.join("careem/CRM-PZ.html"),
+            "Tax Invoice\nCareem Networks\nInvoice No: CRM-PZ\nInvoice Date: 26 Aug 2026\n1 x Pepperoni Pizza AED 40.00\n1 x Large (13\") AED 15.00\nTotal AED 55.00\n",
+        )
+        .unwrap();
+        let app = App::open(dir.path().join("oma")).unwrap();
+        let options = BringfastImport {
+            dry_run: false,
+            receipts_dir: Some(receipts.clone()),
+            store_accounts: false,
+        };
+        app.import_bringfast(&source, &options).unwrap();
+        let before = app.list_invoices().unwrap();
+        assert_eq!(before.len(), 1);
+        assert!(before[0]
+            .lines
+            .iter()
+            .any(|line| line.name.contains("Large")));
+        app.with_conn(|conn| {
+            conn.execute("DELETE FROM invoice_lines WHERE name LIKE 'Large%'", [])?;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(app.list_invoices().unwrap()[0].lines.len(), 1);
+        app.import_bringfast(&source, &options).unwrap();
+        let after = app.list_invoices().unwrap();
+        let names: Vec<&str> = after[0]
+            .lines
+            .iter()
+            .map(|line| line.name.as_str())
+            .collect();
+        assert!(names.iter().any(|name| name.contains("Pepperoni")));
+        assert!(names.iter().any(|name| name.contains("Large")));
+        assert_eq!(after[0].lines.len(), 2);
+        assert!((after[0].total - 55.0).abs() < 0.01);
+    }
 }

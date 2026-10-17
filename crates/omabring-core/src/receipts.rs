@@ -9,11 +9,11 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use chrono::NaiveDate;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::bringfast::ImportReport;
 use crate::error::{Error, Result};
-use crate::model::{junk_product_name, normalize_name, StoreId};
+use crate::model::{is_size_upcharge, junk_product_name, normalize_name, StoreId};
 
 struct ParsedLine {
     name: String,
@@ -59,7 +59,7 @@ pub(crate) fn import_receipt_files(
         };
         match parsed {
             Some(parsed) if !parsed.invoice_no.is_empty() => {
-                if known_receipt(
+                if let Some(invoice_id) = known_receipt(
                     dest,
                     parsed.store,
                     &parsed.invoice_no,
@@ -67,6 +67,9 @@ pub(crate) fn import_receipt_files(
                     &path,
                 )? {
                     report.files_existing += 1;
+                    if !dry_run {
+                        report.lines += add_missing_lines(dest, invoice_id, &parsed)?;
+                    }
                     continue;
                 }
                 report.files_new += 1;
@@ -121,7 +124,7 @@ fn known_receipt(
     invoice_no: &str,
     order_no: &str,
     path: &Path,
-) -> Result<bool> {
+) -> Result<Option<i64>> {
     let stem = path
         .file_stem()
         .and_then(|name| name.to_str())
@@ -155,11 +158,66 @@ fn known_receipt(
                 |row| row.get(0),
             )
             .ok();
-        if found.is_some() {
-            return Ok(true);
+        if let Some(id) = found {
+            return Ok(Some(id));
         }
     }
-    Ok(false)
+    Ok(None)
+}
+
+/// A later import puts back lines that were removed, without duplicating the rest.
+fn add_missing_lines(dest: &Connection, invoice_id: i64, parsed: &ParsedReceipt) -> Result<usize> {
+    let mut added = 0usize;
+    for line in &parsed.items {
+        // An existing receipt keeps its stored lines. Only a size upcharge that
+        // was dropped on an earlier import is put back.
+        if junk_product_name(&line.name) || !is_size_upcharge(&line.name) {
+            continue;
+        }
+        let key = normalize_name(&line.name);
+        let exists: Option<i64> = dest
+            .query_row(
+                "SELECT id FROM invoice_lines WHERE invoice_id = ?1 AND name_key = ?2",
+                params![invoice_id, key],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if exists.is_some() {
+            continue;
+        }
+        dest.execute(
+            "INSERT INTO invoice_lines (invoice_id, name, name_key, qty, unit, unit_price, line_total, product_key) VALUES (?1, ?2, ?3, ?4, 'piece', ?5, ?6, ?7)",
+            params![
+                invoice_id,
+                line.name,
+                key,
+                line.qty,
+                line.unit_price,
+                line.line_total,
+                key
+            ],
+        )?;
+        added += 1;
+    }
+    if added > 0 {
+        let sum: f64 = dest.query_row(
+            "SELECT coalesce(sum(line_total), 0) FROM invoice_lines WHERE invoice_id = ?1",
+            params![invoice_id],
+            |row| row.get(0),
+        )?;
+        let header: f64 = dest.query_row(
+            "SELECT total FROM invoices WHERE id = ?1",
+            params![invoice_id],
+            |row| row.get(0),
+        )?;
+        if sum > header + 0.009 {
+            dest.execute(
+                "UPDATE invoices SET total = ?1 WHERE id = ?2",
+                params![sum, invoice_id],
+            )?;
+        }
+    }
+    Ok(added)
 }
 
 fn insert_receipt(dest: &Connection, parsed: &ParsedReceipt) -> Result<()> {
@@ -1437,8 +1495,8 @@ Service Fee 1.0 1.0 3.42 3.26 3.26 5.00 0.16 0.00 3.42
             "Grandiose Supermarket Sole Proprietorship LLC"
         ));
         assert!(!super::skip_name("Grandiose Chicken"));
-        assert!(super::skip_name("Large (13\")"));
-        assert!(super::skip_name("Large (13\u{2033})"));
+        assert!(!super::skip_name("Large (13\")"));
+        assert!(!super::skip_name("Large (13\u{2033})"));
         assert!(!super::skip_name("Tuna Steak"));
         assert!(!super::skip_name("Oasis Blu"));
         assert!(!super::skip_name("P.SOLEIL"));
@@ -1447,7 +1505,7 @@ Service Fee 1.0 1.0 3.42 3.26 3.26 5.00 0.16 0.00 3.42
         assert!(!super::skip_name("Rice 5kg"));
         assert!(!super::skip_name("Carrefour Chicken"));
         assert!(super::careem_item("Grandiose", 1.0, 12.0).is_none());
-        assert!(super::careem_item("Large (13\")", 1.0, 12.0).is_none());
+        assert!(super::careem_item("Large (13\")", 1.0, 15.0).is_some());
         assert!(super::careem_item("Tuna Steak", 1.0, 12.0).is_some());
     }
 

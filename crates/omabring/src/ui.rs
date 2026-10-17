@@ -2167,6 +2167,44 @@ fn fitted_texture(path: &std::path::Path, size: i32, cover: bool) -> Option<gtk:
     Some(fitted)
 }
 
+/// Scale a logo to `height` and let the width follow the picture.
+/// A wide wordmark stays wide instead of being letterboxed into a square.
+fn fit_logo(texture: &gtk::gdk::Texture, height: i32) -> Option<gtk::gdk::Texture> {
+    let width = texture.width();
+    let src_h = texture.height();
+    if width <= 0 || src_h <= 0 || height <= 0 {
+        return None;
+    }
+    let scale = height as f64 / src_h as f64;
+    let out_w = ((width as f64) * scale).round().clamp(1.0, 480.0) as i32;
+    let src_stride = width as usize * 4;
+    let mut src = vec![0u8; src_stride * src_h as usize];
+    texture.download(&mut src, src_stride);
+    let mut dst = vec![0u8; out_w as usize * height as usize * 4];
+    for y in 0..height {
+        let sy = ((y as f64 + 0.5) / scale).floor() as i32;
+        let sy = sy.clamp(0, src_h - 1) as usize;
+        for x in 0..out_w {
+            let sx = ((x as f64 + 0.5) / scale).floor() as i32;
+            let sx = sx.clamp(0, width - 1) as usize;
+            let from = sy * src_stride + sx * 4;
+            let to = (y as usize * out_w as usize + x as usize) * 4;
+            dst[to..to + 4].copy_from_slice(&src[from..from + 4]);
+        }
+    }
+    let bytes = gtk::glib::Bytes::from_owned(dst);
+    Some(
+        gtk::gdk::MemoryTexture::new(
+            out_w,
+            height,
+            gtk::gdk::MemoryFormat::B8g8r8a8,
+            &bytes,
+            out_w as usize * 4,
+        )
+        .upcast(),
+    )
+}
+
 fn fit_texture(texture: &gtk::gdk::Texture, size: i32, cover: bool) -> Option<gtk::gdk::Texture> {
     let width = texture.width();
     let height = texture.height();
@@ -2678,7 +2716,9 @@ fn receipt_page(shell: &Rc<RefCell<Shell>>, id: i64) -> gtk::Box {
 
     let head = gtk::Box::new(gtk::Orientation::Horizontal, 4);
     head.add_css_class("bf-thead");
-    head.append(&cell("ITEM", 0, false));
+    let item = cell("ITEM", 0, false);
+    item.set_hexpand(true);
+    head.append(&item);
     let qty = cell("QTY", 72, true);
     qty.set_hexpand(false);
     let amount = cell("AED", 96, true);
@@ -3434,12 +3474,16 @@ fn store_logo_small(id: StoreId) -> gtk::Widget {
 fn logo_picture(id: StoreId, size: i32) -> gtk::Widget {
     let bytes = gtk::glib::Bytes::from_static(logo_png(id));
     if let Ok(texture) = gtk::gdk::Texture::from_bytes(&bytes) {
-        if let Some(fitted) = fit_texture(&texture, size, false) {
+        if let Some(fitted) = fit_logo(&texture, size) {
+            let width = fitted.width();
+            let height = fitted.height();
             let picture = gtk::Picture::for_paintable(&fitted);
-            picture.set_can_shrink(true);
-            picture.set_size_request(size, size);
+            picture.set_can_shrink(false);
+            picture.set_size_request(width, height);
             picture.set_hexpand(false);
             picture.set_vexpand(false);
+            picture.set_halign(gtk::Align::Start);
+            picture.set_valign(gtk::Align::Center);
             picture.set_content_fit(gtk::ContentFit::Contain);
             picture.add_css_class("bf-logo");
             if size < 24 {
