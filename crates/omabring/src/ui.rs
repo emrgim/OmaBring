@@ -2226,7 +2226,7 @@ fn fit_texture(texture: &gtk::gdk::Texture, size: i32, cover: bool) -> Option<gt
         gtk::gdk::MemoryTexture::new(
             size,
             size,
-            gtk::gdk::MemoryFormat::R8g8b8a8,
+            gtk::gdk::MemoryFormat::B8g8r8a8,
             &bytes,
             size as usize * 4,
         )
