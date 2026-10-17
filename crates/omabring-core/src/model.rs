@@ -519,7 +519,76 @@ pub fn junk_product_name(name: &str) -> bool {
     if STORES.contains(&folded.as_str()) {
         return true;
     }
+    // Letters only, so "GRANDIOSE!!!" and a hidden character inside the word
+    // still match. "Grandiose Chicken" does not.
+    const STORE_LETTERS: &[&str] = &[
+        "grandiose",
+        "carrefour",
+        "unioncoop",
+        "waitrose",
+        "spinneys",
+        "mmi",
+        "africaneastern",
+        "africanandeastern",
+        "careem",
+        "mcdonalds",
+        "amazon",
+        "amazonit",
+        "amazonae",
+    ];
+    let letters: String = name
+        .chars()
+        .filter(|c| c.is_ascii_alphabetic())
+        .flat_map(|c| c.to_lowercase())
+        .collect();
+    if STORE_LETTERS.contains(&letters.as_str()) {
+        return true;
+    }
+    // "Grandiose Supermarket LLC" is the store banner. "Grandiose Chicken" stays.
+    if store_banner(&folded) {
+        return true;
+    }
     size_fragment(&folded)
+}
+
+fn store_banner(folded: &str) -> bool {
+    const FILLER: &[&str] = &[
+        "supermarket",
+        "market",
+        "store",
+        "llc",
+        "ltd",
+        "limited",
+        "sole",
+        "proprietorship",
+        "uae",
+        "dubai",
+        "inc",
+    ];
+    let kept: Vec<&str> = folded
+        .split_whitespace()
+        .filter(|token| !FILLER.contains(token))
+        .collect();
+    let [token] = kept.as_slice() else {
+        return false;
+    };
+    let letters: String = token.chars().filter(|c| c.is_ascii_alphabetic()).collect();
+    matches!(
+        letters.as_str(),
+        "grandiose"
+            | "carrefour"
+            | "unioncoop"
+            | "waitrose"
+            | "spinneys"
+            | "mmi"
+            | "africaneastern"
+            | "africanandeastern"
+            | "careem"
+            | "mcdonalds"
+            | "amazon"
+            | "amazonit"
+            | "amazonae"
+    )
 }
 
 fn fold_product_name(name: &str) -> String {

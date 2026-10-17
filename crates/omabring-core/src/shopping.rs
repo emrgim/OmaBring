@@ -1295,6 +1295,32 @@ mod tests {
         assert!(lapsed.is_empty());
     }
 
+    #[test]
+    fn forecast_skips_store_banners() {
+        let (_dir, app) = opened();
+        let doc = r#"{
+            "invoices": [
+                {"store": "grandiose", "invoice_no": "1", "date": "2026-03-01", "currency": "AED", "items": [
+                    {"name": "GRANDIOSE!!!", "qty": 1, "unit": "piece", "unit_price": 1},
+                    {"name": "Grandiose Supermarket Sole Proprietorship LLC", "qty": 1, "unit": "piece", "unit_price": 1},
+                    {"name": "Eggs", "qty": 1, "unit": "piece", "unit_price": 12}
+                ]},
+                {"store": "grandiose", "invoice_no": "2", "date": "2026-03-12", "currency": "AED", "items": [
+                    {"name": "GRANDIOSE!!!", "qty": 1, "unit": "piece", "unit_price": 1},
+                    {"name": "Grandiose Supermarket Sole Proprietorship LLC", "qty": 1, "unit": "piece", "unit_price": 1},
+                    {"name": "Eggs", "qty": 1, "unit": "piece", "unit_price": 11}
+                ]}
+            ]
+        }"#;
+        app.import_document(doc).unwrap();
+        let today = NaiveDate::from_ymd_opt(2026, 3, 12).unwrap();
+        let forecast = app.forecast(today).unwrap();
+        assert!(forecast.iter().any(|item| item.name == "Eggs"));
+        assert!(forecast
+            .iter()
+            .all(|item| !crate::model::junk_product_name(&item.name)));
+    }
+
     fn saved_one() -> String {
         r#"{"store":"carrefour","invoice_no":"A","date":"2026-01-01","currency":"AED","items":[{"name":"Al Ain Water","qty":2,"unit":"piece","unit_price":1.5}]}"#.into()
     }

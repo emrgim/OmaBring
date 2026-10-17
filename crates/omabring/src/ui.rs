@@ -374,10 +374,13 @@ fn chrome_root(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
         .hexpand(true)
         .hscrollbar_policy(gtk::PolicyType::Never)
         .build();
+    shell.borrow().content.set_hexpand(true);
+    shell.borrow().content.set_halign(gtk::Align::Fill);
     shell.borrow().content.set_margin_top(4);
     shell.borrow().content.set_margin_bottom(6);
     shell.borrow().content.set_margin_start(6);
     shell.borrow().content.set_margin_end(6);
+    scroll.set_propagate_natural_width(false);
     root.append(&header);
     root.append(&shell.borrow().filters);
     root.append(&scroll);
@@ -767,7 +770,14 @@ fn forecast_page(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
     let page = gtk::Box::new(gtk::Orientation::Vertical, 4);
     page.append(&heading_mark("", "FORECAST"));
     let today = chrono::Utc::now().date_naive();
-    let items = shell.borrow().core.forecast(today).unwrap_or_default();
+    let items: Vec<_> = shell
+        .borrow()
+        .core
+        .forecast(today)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|item| !junk_product_name(&item.name))
+        .collect();
     let card = gtk::Box::new(gtk::Orientation::Vertical, 6);
     card.add_css_class("bf-card");
     card.add_css_class("bf-dash");
@@ -1000,26 +1010,17 @@ struct BarLayout {
     width: i32,
     height: f64,
     centre: bool,
-    stride: usize,
 }
 
 fn bar_layout(count: usize) -> BarLayout {
-    let (width, height, centre) = if count <= 3 {
-        (72, 96.0, true)
-    } else if count <= 8 {
-        (48, 80.0, true)
-    } else if count <= 16 {
-        (28, 64.0, false)
-    } else {
-        (16, 52.0, false)
-    };
-    let pitch = (width + 2) as f64;
-    let stride = (46.0 / pitch).ceil() as usize;
+    let height = if count <= 6 { 72.0 } else { 52.0 };
+    // A handful of bars keep a modest width and sit in the centre.
+    // More than that share the card, with no per-bar minimum.
+    let width = if count > 0 && count <= 6 { 56 } else { -1 };
     BarLayout {
         width,
         height,
-        centre,
-        stride: stride.max(1),
+        centre: width > 0,
     }
 }
 
@@ -1033,62 +1034,60 @@ fn axis_name(name: &str) -> String {
     }
 }
 
-fn attach_axis(grid: &gtk::Grid, column: i32, span: i32, text: &str) {
+fn chart_rows(layout: &BarLayout) -> (gtk::Box, gtk::Box, gtk::Box) {
+    let wrap = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    wrap.set_hexpand(!layout.centre);
+    let bars = gtk::Box::new(gtk::Orientation::Horizontal, 2);
+    let labels = gtk::Box::new(gtk::Orientation::Horizontal, 2);
+    if layout.centre {
+        bars.set_halign(gtk::Align::Center);
+        bars.set_hexpand(false);
+        labels.set_halign(gtk::Align::Center);
+        labels.set_hexpand(false);
+    } else {
+        bars.set_homogeneous(true);
+        bars.set_hexpand(true);
+        bars.set_halign(gtk::Align::Fill);
+        labels.set_homogeneous(true);
+        labels.set_hexpand(true);
+        labels.set_halign(gtk::Align::Fill);
+    }
+    wrap.append(&bars);
+    wrap.append(&labels);
+    (wrap, bars, labels)
+}
+
+fn axis_slots(count: usize, centre: bool) -> Vec<usize> {
+    if count == 0 {
+        return Vec::new();
+    }
+    if centre || count <= 8 {
+        return (0..count).collect();
+    }
+    let shown = 8;
+    (0..shown)
+        .map(|index| index * (count - 1) / (shown - 1))
+        .collect()
+}
+
+fn push_axis(row: &gtk::Box, text: &str, layout: &BarLayout) {
     let caption = gtk::Label::new(Some(text));
     caption.add_css_class("bf-muted");
     caption.set_xalign(0.5);
-    caption.set_max_width_chars(10);
     caption.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    caption.set_hexpand(true);
-    grid.attach(&caption, column, 1, span, 1);
-}
-
-fn bar_scroller(grid: &gtk::Grid, layout: &BarLayout) -> gtk::Widget {
-    grid.set_halign(if layout.centre {
-        gtk::Align::Center
+    caption.set_max_width_chars(8);
+    if layout.centre {
+        caption.set_width_request(layout.width);
+        caption.set_hexpand(false);
     } else {
-        gtk::Align::Start
-    });
-    grid.set_hexpand(false);
-    grid.set_column_spacing(2);
-    grid.set_row_spacing(2);
-    let scroll = gtk::ScrolledWindow::builder()
-        .child(grid)
-        .hscrollbar_policy(gtk::PolicyType::Automatic)
-        .vscrollbar_policy(gtk::PolicyType::Never)
-        .min_content_height(layout.height as i32 + 20)
-        .propagate_natural_height(true)
-        .hexpand(true)
-        .build();
-    scroll.upcast()
-}
-
-fn bar_fill(amount: f64, max: f64, layout: &BarLayout) -> gtk::Box {
-    let track = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    track.set_size_request(layout.width, layout.height as i32);
-    let spacer = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    spacer.set_vexpand(true);
-    let fill = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    fill.add_css_class("bf-bar-fill");
-    fill.set_hexpand(true);
-    let height = if max <= 0.0 {
-        0
-    } else {
-        ((amount / max) * layout.height)
-            .round()
-            .clamp(0.0, layout.height) as i32
-    };
-    if height > 0 {
-        fill.set_height_request(height.max(8).min(layout.height as i32));
+        caption.set_hexpand(true);
     }
-    track.append(&spacer);
-    track.append(&fill);
-    track
+    row.append(&caption);
 }
 
 fn bars(buckets: &[(String, f64)]) -> gtk::Widget {
     let layout = bar_layout(buckets.len());
-    let grid = gtk::Grid::new();
+    let (wrap, row, labels) = chart_rows(&layout);
     let max = buckets.iter().fold(0.0_f64, |acc, (_, n)| acc.max(*n));
     let count = buckets.len();
     for (index, (label, amount)) in buckets.iter().enumerate() {
@@ -1098,30 +1097,32 @@ fn bars(buckets: &[(String, f64)]) -> gtk::Widget {
             track.add_css_class("on");
         }
         track.set_tooltip_text(Some(&format!("{label} · {amount:.2}")));
-        grid.attach(&track, index as i32, 0, 1, 1);
+        row.append(&track);
     }
-    let mut column = 0i32;
-    while (column as usize) < count {
-        let span = layout.stride.min(count - column as usize) as i32;
-        attach_axis(&grid, column, span, &buckets[column as usize].0);
-        column += span;
+    for index in axis_slots(count, layout.centre) {
+        push_axis(&labels, &buckets[index].0, &layout);
     }
-    bar_scroller(&grid, &layout)
+    wrap.upcast()
 }
 
 fn spend_bars(shell: &Rc<RefCell<Shell>>, buckets: &[SpendBucket]) -> gtk::Widget {
     let layout = bar_layout(buckets.len());
-    let grid = gtk::Grid::new();
+    let (wrap, row, labels) = chart_rows(&layout);
     let max = buckets
         .iter()
         .fold(0.0_f64, |acc, bucket| acc.max(bucket.amount));
     let focus = shell.borrow().bar_focus.clone();
-    for (index, bucket) in buckets.iter().enumerate() {
+    for bucket in buckets {
         let track = bar_fill(bucket.amount, max, &layout);
         let button = gtk::Button::new();
         button.set_child(Some(&track));
         button.add_css_class("bf-bar");
-        button.set_size_request(layout.width, layout.height as i32);
+        button.set_hexpand(!layout.centre);
+        if layout.width > 0 {
+            button.set_size_request(layout.width, layout.height as i32);
+        } else {
+            button.set_size_request(-1, layout.height as i32);
+        }
         if focus.as_deref() == Some(bucket.key.as_str()) {
             button.add_css_class("focus");
         }
@@ -1148,16 +1149,40 @@ fn spend_bars(shell: &Rc<RefCell<Shell>>, buckets: &[SpendBucket]) -> gtk::Widge
             drop(state);
             schedule(&shell_click);
         });
-        grid.attach(&button, index as i32, 0, 1, 1);
+        row.append(&button);
     }
-    let count = buckets.len();
-    let mut column = 0i32;
-    while (column as usize) < count {
-        let span = layout.stride.min(count - column as usize) as i32;
-        attach_axis(&grid, column, span, &buckets[column as usize].label);
-        column += span;
+    for index in axis_slots(buckets.len(), layout.centre) {
+        push_axis(&labels, &buckets[index].label, &layout);
     }
-    bar_scroller(&grid, &layout)
+    wrap.upcast()
+}
+
+fn bar_fill(amount: f64, max: f64, layout: &BarLayout) -> gtk::Box {
+    let track = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    track.set_hexpand(!layout.centre);
+    if layout.width > 0 {
+        track.set_size_request(layout.width, layout.height as i32);
+    } else {
+        track.set_size_request(-1, layout.height as i32);
+    }
+    let spacer = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    spacer.set_vexpand(true);
+    let fill = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    fill.add_css_class("bf-bar-fill");
+    fill.set_hexpand(true);
+    let height = if max <= 0.0 {
+        0
+    } else {
+        ((amount / max) * layout.height)
+            .round()
+            .clamp(0.0, layout.height) as i32
+    };
+    if height > 0 {
+        fill.set_height_request(height.max(8).min(layout.height as i32));
+    }
+    track.append(&spacer);
+    track.append(&fill);
+    track
 }
 
 fn trend_card(products: &[Prod]) -> gtk::Box {
@@ -1739,7 +1764,7 @@ fn product_page(shell: &Rc<RefCell<Shell>>) -> gtk::Box {
 
     let history = shell.borrow().core.product_history(&name).ok();
     let hero = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    hero.append(&product_thumb(shell, &name, 32));
+    hero.append(&product_thumb(shell, &name, 64));
     let title = history
         .as_ref()
         .map(|item| item.name.to_uppercase())
@@ -2092,28 +2117,121 @@ fn purchase_list(shell: &Rc<RefCell<Shell>>, item: &omabring_core::ProductHistor
 }
 
 fn product_thumb(shell: &Rc<RefCell<Shell>>, name: &str, size: i32) -> gtk::Widget {
+    // Scale once into a square paintable of exactly `size`. Picture then
+    // reports that size as both minimum and natural, so a full photo cannot
+    // widen the row or the page.
     if let Some(path) = shell.borrow().core.product_image(name) {
-        let picture = gtk::Picture::for_filename(path);
-        picture.set_size_request(size, size);
-        picture.set_can_shrink(false);
-        picture.set_content_fit(gtk::ContentFit::Cover);
-        picture.set_overflow(gtk::Overflow::Hidden);
-        picture.add_css_class("bf-thumb");
-        return picture.upcast();
+        if let Some(texture) = fitted_texture(&path, size, true) {
+            let picture = gtk::Picture::for_paintable(&texture);
+            picture.set_can_shrink(true);
+            picture.set_content_fit(gtk::ContentFit::Cover);
+            picture.set_size_request(size, size);
+            picture.set_hexpand(false);
+            picture.set_vexpand(false);
+            picture.set_halign(gtk::Align::Start);
+            picture.set_valign(gtk::Align::Center);
+            picture.set_overflow(gtk::Overflow::Hidden);
+            picture.add_css_class("bf-thumb");
+            return picture.upcast();
+        }
     }
     let thumb = gtk::Label::new(Some(&initial(name)));
     thumb.add_css_class("bf-thumb");
     thumb.set_size_request(size, size);
+    thumb.set_hexpand(false);
+    thumb.set_vexpand(false);
+    thumb.set_halign(gtk::Align::Start);
+    thumb.set_valign(gtk::Align::Center);
     thumb.set_xalign(0.5);
     thumb.set_yalign(0.5);
     thumb.upcast()
 }
 
-fn store_logo_small(id: StoreId) -> gtk::Widget {
-    let widget = store_logo(id);
-    widget.set_size_request(16, 16);
-    widget.add_css_class("bf-logo-sm");
-    widget
+thread_local! {
+    static THUMB_CACHE: RefCell<HashMap<(String, i32, bool), gtk::gdk::Texture>> =
+        RefCell::new(HashMap::new());
+}
+
+fn fitted_texture(path: &std::path::Path, size: i32, cover: bool) -> Option<gtk::gdk::Texture> {
+    if size <= 0 {
+        return None;
+    }
+    let key = (path.to_string_lossy().into_owned(), size, cover);
+    if let Some(hit) = THUMB_CACHE.with(|cache| cache.borrow().get(&key).cloned()) {
+        return Some(hit);
+    }
+    let file = gtk::gio::File::for_path(path);
+    let source = gtk::gdk::Texture::from_file(&file).ok()?;
+    let fitted = fit_texture(&source, size, cover)?;
+    THUMB_CACHE.with(|cache| cache.borrow_mut().insert(key, fitted.clone()));
+    Some(fitted)
+}
+
+fn fit_texture(texture: &gtk::gdk::Texture, size: i32, cover: bool) -> Option<gtk::gdk::Texture> {
+    let width = texture.width();
+    let height = texture.height();
+    if width <= 0 || height <= 0 || size <= 0 {
+        return None;
+    }
+    let src_stride = width as usize * 4;
+    let mut src = vec![0u8; src_stride * height as usize];
+    texture.download(&mut src, src_stride);
+    let size_f = size as f64;
+    let scale = if cover {
+        (size_f / width as f64).max(size_f / height as f64)
+    } else {
+        (size_f / width as f64).min(size_f / height as f64)
+    };
+    if scale <= 0.0 {
+        return None;
+    }
+    let mut dst = vec![0u8; size as usize * size as usize * 4];
+    if cover {
+        let crop_w = (size_f / scale).clamp(1.0, width as f64);
+        let crop_h = (size_f / scale).clamp(1.0, height as f64);
+        let x0 = ((width as f64 - crop_w) / 2.0).max(0.0);
+        let y0 = ((height as f64 - crop_h) / 2.0).max(0.0);
+        for y in 0..size {
+            let sy = (y0 + (y as f64 + 0.5) * crop_h / size_f).floor() as i32;
+            let sy = sy.clamp(0, height - 1) as usize;
+            for x in 0..size {
+                let sx = (x0 + (x as f64 + 0.5) * crop_w / size_f).floor() as i32;
+                let sx = sx.clamp(0, width - 1) as usize;
+                let from = sy * src_stride + sx * 4;
+                let to = (y as usize * size as usize + x as usize) * 4;
+                dst[to..to + 4].copy_from_slice(&src[from..from + 4]);
+            }
+        }
+    } else {
+        let draw_w = ((width as f64) * scale).round().clamp(1.0, size_f) as i32;
+        let draw_h = ((height as f64) * scale).round().clamp(1.0, size_f) as i32;
+        let x_off = (size - draw_w) / 2;
+        let y_off = (size - draw_h) / 2;
+        for y in 0..draw_h {
+            let sy = ((y as f64 + 0.5) / scale).floor() as i32;
+            let sy = sy.clamp(0, height - 1) as usize;
+            let dy = (y + y_off).clamp(0, size - 1) as usize;
+            for x in 0..draw_w {
+                let sx = ((x as f64 + 0.5) / scale).floor() as i32;
+                let sx = sx.clamp(0, width - 1) as usize;
+                let dx = (x + x_off).clamp(0, size - 1) as usize;
+                let from = sy * src_stride + sx * 4;
+                let to = (dy * size as usize + dx) * 4;
+                dst[to..to + 4].copy_from_slice(&src[from..from + 4]);
+            }
+        }
+    }
+    let bytes = gtk::glib::Bytes::from_owned(dst);
+    Some(
+        gtk::gdk::MemoryTexture::new(
+            size,
+            size,
+            gtk::gdk::MemoryFormat::R8g8b8a8,
+            &bytes,
+            size as usize * 4,
+        )
+        .upcast(),
+    )
 }
 
 fn paint_filters(shell: &Rc<RefCell<Shell>>) {
@@ -2694,7 +2812,7 @@ fn load_view(shell: &Rc<RefCell<Shell>>) -> ViewData {
 fn receipt_list(shell: &Rc<RefCell<Shell>>, invoices: &[InvoiceSummary]) -> gtk::Box {
     let card = gtk::Box::new(gtk::Orientation::Vertical, 0);
     card.add_css_class("bf-card");
-    let kicker = gtk::Label::new(Some("RECEIPTS"));
+    let kicker = gtk::Label::new(Some(&format!("RECEIPTS · {}", invoices.len())));
     kicker.add_css_class("bf-kicker");
     kicker.set_xalign(0.0);
     card.append(&kicker);
@@ -3112,7 +3230,6 @@ fn kpi(value: &str, caption: &str) -> gtk::Box {
     let box_ = gtk::Box::new(gtk::Orientation::Vertical, 0);
     box_.add_css_class("bf-stat");
     box_.set_hexpand(true);
-    box_.set_size_request(72, -1);
     let caption = gtk::Label::new(Some(caption));
     caption.add_css_class("bf-kicker");
     caption.set_xalign(0.0);
@@ -3307,18 +3424,34 @@ fn startup_query() -> String {
 }
 
 fn store_logo(id: StoreId) -> gtk::Widget {
+    logo_picture(id, 32)
+}
+
+fn store_logo_small(id: StoreId) -> gtk::Widget {
+    logo_picture(id, 16)
+}
+
+fn logo_picture(id: StoreId, size: i32) -> gtk::Widget {
     let bytes = gtk::glib::Bytes::from_static(logo_png(id));
     if let Ok(texture) = gtk::gdk::Texture::from_bytes(&bytes) {
-        let picture = gtk::Picture::for_paintable(&texture);
-        picture.set_size_request(32, 32);
-        picture.set_content_fit(gtk::ContentFit::Contain);
-        picture.add_css_class("bf-logo");
-        return picture.upcast();
+        if let Some(fitted) = fit_texture(&texture, size, false) {
+            let picture = gtk::Picture::for_paintable(&fitted);
+            picture.set_can_shrink(true);
+            picture.set_size_request(size, size);
+            picture.set_hexpand(false);
+            picture.set_vexpand(false);
+            picture.set_content_fit(gtk::ContentFit::Contain);
+            picture.add_css_class("bf-logo");
+            if size < 24 {
+                picture.add_css_class("bf-logo-sm");
+            }
+            return picture.upcast();
+        }
     }
     let logo = gtk::Label::new(Some(store_mark(id)));
     logo.add_css_class("bf-logo");
     logo.add_css_class(logo_class(id));
-    logo.set_size_request(32, 32);
+    logo.set_size_request(size, size);
     logo.set_xalign(0.5);
     logo.set_yalign(0.5);
     logo.upcast()

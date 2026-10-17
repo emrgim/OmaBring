@@ -170,6 +170,47 @@ impl App {
         Ok(path)
     }
 
+    /// True when this name was looked up in the last week, hit or miss.
+    pub fn image_search_recent(&self, name: &str) -> Result<bool> {
+        let key = normalize_name(name);
+        if key.is_empty() {
+            return Ok(false);
+        }
+        let searched_at: Option<String> = self.with_conn(|conn| {
+            conn.query_row(
+                "SELECT searched_at FROM image_searches WHERE name_key = ?1",
+                params![key],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(Error::from)
+        })?;
+        let Some(searched_at) = searched_at else {
+            return Ok(false);
+        };
+        let Ok(then) = chrono::DateTime::parse_from_rfc3339(&searched_at) else {
+            return Ok(false);
+        };
+        let age = Utc::now().signed_duration_since(then.with_timezone(&Utc));
+        Ok(age.num_hours() < 24 * 7)
+    }
+
+    /// Remembers a catalog search so the next import does not repeat it.
+    pub fn remember_image_search(&self, name: &str, found: bool) -> Result<()> {
+        let key = normalize_name(name);
+        if key.is_empty() {
+            return Ok(());
+        }
+        self.with_conn(|conn| {
+            conn.execute(
+                "INSERT INTO image_searches (name_key, searched_at, found) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(name_key) DO UPDATE SET searched_at = excluded.searched_at, found = excluded.found",
+                params![key, now_rfc3339(), i64::from(found)],
+            )?;
+            Ok(())
+        })
+    }
+
     /// Receipt names with no saved picture, and the store that sold them.
     pub fn products_missing_images(&self) -> Result<Vec<MissingImage>> {
         self.with_conn(|conn| {
@@ -1025,7 +1066,13 @@ mod tests {
                 [],
                 |row| row.get(0),
             )?;
-            for name in ["Grandiose", "Large (13\")", "Tuna Steak"] {
+            for name in [
+                "Grandiose",
+                "GRANDIOSE!!!",
+                "Grand\u{200b}iose",
+                "Large (13\")",
+                "Tuna Steak",
+            ] {
                 conn.execute(
                     "INSERT INTO invoice_lines (invoice_id, name, name_key, qty, unit, unit_price, line_total, product_key) VALUES (?1, ?2, ?3, 1, 'piece', 10, 10, ?3)",
                     params![id, name, normalize_name(name)],
@@ -1083,5 +1130,24 @@ mod tests {
         assert!(app.product_image("AL JAZIRA EGGS").unwrap().is_file());
         app.store_product_image("Chocolate Milk", png).unwrap();
         assert!(app.product_image("Milk").is_none());
+    }
+
+    #[test]
+    fn image_search_is_remembered_for_a_week() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = App::open(dir.path()).unwrap();
+        assert!(!app.image_search_recent("Tuna Steak").unwrap());
+        app.remember_image_search("Tuna Steak", false).unwrap();
+        assert!(app.image_search_recent("tuna  steak").unwrap());
+        let old = (Utc::now() - chrono::Duration::days(30)).to_rfc3339();
+        app.with_conn(|conn| {
+            conn.execute(
+                "UPDATE image_searches SET searched_at = ?1 WHERE name_key = ?2",
+                params![old, normalize_name("Tuna Steak")],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        assert!(!app.image_search_recent("Tuna Steak").unwrap());
     }
 }

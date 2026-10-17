@@ -362,6 +362,13 @@ fn backfill_images(core: &App, source: &std::path::Path, receipts_dir: Option<&s
             return;
         }
     };
+    let missing: Vec<_> = missing
+        .into_iter()
+        .filter(|item| {
+            core.product_image(&item.name).is_none()
+                && !core.image_search_recent(&item.name).unwrap_or(false)
+        })
+        .collect();
     if missing.is_empty() {
         return;
     }
@@ -389,25 +396,24 @@ fn backfill_images(core: &App, source: &std::path::Path, receipts_dir: Option<&s
                 item_urls.extend(list.clone());
             }
         }
-        if core
+        let mut found = core
             .adopt_product_image(&item.name, &keys, &item_urls, &dirs)
-            .unwrap_or(false)
-        {
+            .unwrap_or(false);
+        if found {
             saved += 1;
-        } else {
-            let mut found = false;
-            if item.store == omabring_core::StoreId::Mcdonalds {
-                for query in image_queries(&item.name) {
-                    let Some(url) = omabring_stores::mcdonalds_image(&query) else {
-                        continue;
-                    };
-                    if core.cache_remote_image(&item.name, &url).unwrap_or(false) {
-                        saved += 1;
-                        found = true;
-                        break;
-                    }
+        } else if item.store == omabring_core::StoreId::Mcdonalds {
+            for query in image_queries(&item.name) {
+                let Some(url) = omabring_stores::mcdonalds_image(&query) else {
+                    continue;
+                };
+                if core.cache_remote_image(&item.name, &url).unwrap_or(false) {
+                    saved += 1;
+                    found = true;
+                    break;
                 }
             }
+        }
+        if !found {
             for query in image_queries(&item.name) {
                 if found {
                     break;
@@ -425,6 +431,7 @@ fn backfill_images(core: &App, source: &std::path::Path, receipts_dir: Option<&s
                 }
             }
         }
+        let _ = core.remember_image_search(&item.name, found);
         if (index + 1) % 25 == 0 {
             eprintln!("images {}/{} saved {saved}", index + 1, missing.len());
         }

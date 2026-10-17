@@ -247,6 +247,12 @@ CREATE TABLE IF NOT EXISTS product_images (
     source_url TEXT NOT NULL DEFAULT ''
 );
 
+CREATE TABLE IF NOT EXISTS image_searches (
+    name_key TEXT PRIMARY KEY,
+    searched_at TEXT NOT NULL,
+    found INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS product_aliases (
     alias_key TEXT PRIMARY KEY,
     canonical_key TEXT NOT NULL

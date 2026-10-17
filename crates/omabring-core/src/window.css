@@ -241,7 +241,7 @@ window.omabring picture.bf-thumb {
 }
 
 window.omabring .bf-stat {
-  min-width: 64px;
+  min-width: 0;
   padding: 1px 4px;
 }
 
@@ -330,8 +330,8 @@ window.omabring button.bf-bar:hover {
   background-color: transparent;
   border: none;
   padding: 0;
-  min-height: 52px;
-  min-width: 6px;
+  min-height: 0;
+  min-width: 0;
 }
 
 window.omabring .bf-dash.is-focus {
@@ -368,7 +368,7 @@ window.omabring button.bf-vote label {
 window.omabring .bf-bar-fill,
 window.omabring .bf-donut {
   background-color: var(--omabring-accent);
-  min-width: 8px;
+  min-width: 0;
 }
 
 window.omabring .bf-bar.on {

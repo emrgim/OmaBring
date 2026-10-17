@@ -1431,6 +1431,12 @@ Service Fee 1.0 1.0 3.42 3.26 3.26 5.00 0.16 0.00 3.42
     #[test]
     fn store_names_and_size_fragments_are_not_items() {
         assert!(super::skip_name("Grandiose"));
+        assert!(super::skip_name("GRANDIOSE!!!"));
+        assert!(super::skip_name("Grand\u{200b}iose"));
+        assert!(super::skip_name(
+            "Grandiose Supermarket Sole Proprietorship LLC"
+        ));
+        assert!(!super::skip_name("Grandiose Chicken"));
         assert!(super::skip_name("Large (13\")"));
         assert!(super::skip_name("Large (13\u{2033})"));
         assert!(!super::skip_name("Tuna Steak"));
